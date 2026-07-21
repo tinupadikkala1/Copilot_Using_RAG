@@ -1,0 +1,65 @@
+[tool.poetry]
+name = "autonomous-support-copilot"
+version = "1.0.0"
+description = "Autonomous Customer Support Copilot — A RAG-based support system using local Ollama models"
+authors = ["TINU THOMAS P <tinupadikkala1@gmail.com>"]
+readme = "README.md"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+# Web serving
+fastapi = "^0.115.0"
+uvicorn = { version = "^0.32.0", extras = ["standard"] }
+# Chat UI
+streamlit = "^1.39.0"
+# HTTP client (for Ollama API calls)
+httpx = "^0.28.0"
+# Data validation
+pydantic = "^2.9.0"
+pydantic-settings = "^2.6.0"
+# Vector store
+chromadb = "^0.5.0"
+# Math
+numpy = "^2.1.0"
+# PDF ingestion
+pypdf = "^5.0.0"
+# HTML ingestion
+beautifulsoup4 = "^4.12.0"
+# For FastAPI form data / multipart
+python-multipart = "^0.0.12"
+
+[tool.poetry.group.dev.dependencies]
+# Testing
+pytest = "^8.3.0"
+pytest-cov = "^5.0.0"
+# Code quality
+black = "^24.10.0"
+mypy = "^1.13.0"
+flake8 = "^7.1.0"
+ruff = "^0.7.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

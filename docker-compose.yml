@@ -1,0 +1,61 @@
+# docker-compose.yml
+#
+# Starts three services:
+#   1. ollama  — local LLM server with nomic-embed-text and qwen3:latest
+#   2. api     — FastAPI server
+#   3. streamlit — Streamlit chat UI
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: copilot-ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  api:
+    build: .
+    container_name: copilot-api
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      COPILOT_OLLAMA_BASE_URL: http://ollama:11434
+      COPILOT_API_KEY: "${COPILOT_API_KEY:-dev-key}"
+      COPILOT_LLM_MODEL: qwen3:latest
+      COPILOT_EMBEDDING_MODEL: nomic-embed-text
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    command: >
+      sh -c "uvicorn copilot.serving.api:app --host 0.0.0.0 --port 8000"
+
+  streamlit:
+    build: .
+    container_name: copilot-streamlit
+    depends_on:
+      - api
+    environment:
+      COPILOT_API_URL: http://api:8000
+      COPILOT_API_KEY: "${COPILOT_API_KEY:-dev-key}"
+    ports:
+      - "8501:8501"
+    restart: unless-stopped
+    command: >
+      sh -c "streamlit run src/copilot/serving/ui/chat_app.py --server.port 8501 --server.address 0.0.0.0"
+
+volumes:
+  ollama_data:

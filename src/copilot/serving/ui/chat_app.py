@@ -55,6 +55,20 @@ st.set_page_config(
     layout="centered",
 )
 
+# ---------------------------------------------------------------------------
+# Sidebar navigation
+# ---------------------------------------------------------------------------
+
+st.sidebar.title("🤖 Copilot")
+st.sidebar.page_link("chat_app.py", label="💬 Chat", icon="💬")
+st.sidebar.page_link("upload.py", label="📤 Upload KB", icon="📤")
+st.sidebar.page_link("dashboard.py", label="📊 Dashboard", icon="📊")
+st.sidebar.divider()
+st.sidebar.caption(
+    "Upload your own support documents on the **Upload KB** page "
+    "to build a custom knowledge base, then ask questions here."
+)
+
 # Render the SPARKIIT-required submission header.
 render_submission_header()
 

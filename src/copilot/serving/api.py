@@ -4,19 +4,30 @@ from __future__ import annotations
 
 import time
 import uuid
+from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, File, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from copilot.analytics import metrics, reporting
 from copilot.analytics.db import init_db
 from copilot.branding import get_landing_metadata
 from copilot.feedback.store import record_feedback
+from copilot.indexing.embedder import Embedder
+from copilot.indexing.index_builder import build_index
+from copilot.indexing.vector_store import ChromaStore
 from copilot.schemas import ChatResponse
 from copilot.serving.deps import get_pipeline
 from copilot.serving.security import RateLimiter, require_api_key
 
 _limiter = RateLimiter()
+
+# Upload configuration (module-level for testability).
+SUPPORTED_UPLOAD_EXTENSIONS: set[str] = {
+    ".md", ".html", ".htm", ".pdf", ".txt", ".csv"
+}
+KB_RAW = Path("data/kb_raw")
+MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +131,104 @@ def create_app() -> FastAPI:
             "deflection_rate": reporting.deflection_rate(),
             "csat": reporting.csat(),
             **metrics.latency_percentiles(),
+        }
+
+    # --- Upload & index building ---
+
+    @app.post(
+        "/upload",
+        dependencies=[Depends(require_api_key)],
+    )
+    async def upload_files(files: list[UploadFile] = File(...)) -> dict:
+        """Upload one or more KB documents and save them to data/kb_raw/.
+
+        Requires ``X-API-Key`` header. Accepted formats:
+        .md, .html, .htm, .pdf, .txt, .csv (max 20 MB per file).
+        """
+        KB_RAW.mkdir(parents=True, exist_ok=True)
+
+        saved = []
+        errors = []
+
+        for file in files:
+            ext = (
+                Path(file.filename or "").suffix.lower()
+                if file.filename
+                else ""
+            )
+
+            if not file.filename:
+                errors.append({"file": "unknown", "error": "Empty filename"})
+                continue
+
+            if ext not in SUPPORTED_UPLOAD_EXTENSIONS:
+                errors.append(
+                    {"file": file.filename, "error": f"Unsupported format '{ext}'"}
+                )
+                continue
+
+            content = await file.read()
+
+            if len(content) == 0:
+                errors.append({"file": file.filename, "error": "Empty file"})
+                continue
+
+            if len(content) > MAX_UPLOAD_SIZE_BYTES:
+                size_mb = len(content) / (1024 * 1024)
+                errors.append(
+                    {
+                        "file": file.filename,
+                        "error": f"File exceeds 20 MB limit ({size_mb:.1f} MB)",
+                    }
+                )
+                continue
+
+            save_path = KB_RAW / file.filename
+            with open(save_path, "wb") as f:
+                f.write(content)
+
+            saved.append(
+                {
+                    "filename": file.filename,
+                    "size_bytes": len(content),
+                    "path": str(save_path),
+                }
+            )
+
+        return {
+            "status": "ok",
+            "saved": saved,
+            "errors": errors,
+            "total_saved": len(saved),
+            "total_errors": len(errors),
+        }
+
+    @app.post(
+        "/upload/build",
+        dependencies=[Depends(require_api_key)],
+    )
+    def build_kb_index() -> dict:
+        """Build/refresh the vector index from all files in data/kb_raw/.
+
+        Requires ``X-API-Key`` header. Returns the number of documents
+        loaded and chunks indexed.
+        """
+        if not KB_RAW.exists() or not any(KB_RAW.iterdir()):
+            return {"status": "ok", "documents_loaded": 0, "chunks_indexed": 0}
+
+        embedder = Embedder()
+        store = ChromaStore(persist_dir="data/chroma")
+        chunks_count = build_index(
+            kb_root=KB_RAW,
+            store=store,
+            embedder=embedder,
+        )
+        docs_count = len(list(KB_RAW.iterdir()))
+
+        return {
+            "status": "ok",
+            "documents_loaded": docs_count,
+            "chunks_indexed": chunks_count,
         }
 
     return app

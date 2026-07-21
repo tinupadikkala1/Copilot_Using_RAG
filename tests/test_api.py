@@ -7,6 +7,7 @@ running. Tests that require Ollama are marked as usual.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import httpx
 import pytest
@@ -93,9 +94,7 @@ class TestChatEndpoint:
         assert resp.status_code == 422
 
     @pytest.mark.skipif(not ollama_available(), reason="Ollama not running")
-    def test_chat_valid_key_returns_response_shape(
-        self, client: TestClient
-    ) -> None:
+    def test_chat_valid_key_returns_response_shape(self, client: TestClient) -> None:
         """A valid request should return a ChatResponse-shaped JSON."""
         resp = client.post(
             "/chat",
@@ -186,3 +185,117 @@ class TestMetricsEndpoint:
         assert "csat" in data
         assert "p50" in data
         assert "p95" in data
+
+
+# ---------------------------------------------------------------------------
+# Upload endpoint
+# ---------------------------------------------------------------------------
+
+
+class TestUploadEndpoint:
+    """Tests for the /upload and /upload/build endpoints."""
+
+    def test_upload_requires_api_key(self, client: TestClient) -> None:
+        """Upload without API key should return 401 or 503."""
+        resp = client.post("/upload")
+        assert resp.status_code in (401, 503)
+
+    def test_upload_requires_files(self, client: TestClient) -> None:
+        """Upload without files should return 422."""
+        resp = client.post(
+            "/upload",
+            headers={"x-api-key": "test-api-key-123"},
+        )
+        assert resp.status_code == 422
+
+    def test_upload_valid_file(self, client: TestClient, tmp_path) -> None:
+        """Upload a valid .md file should succeed."""
+        # Patch the KB_RAW path to use tmp_path for test isolation.
+        import copilot.serving.api as api
+
+        original_kb = api.KB_RAW
+        api.KB_RAW = tmp_path / "kb_raw"
+        api.KB_RAW.mkdir(parents=True, exist_ok=True)
+
+        try:
+            content = b"# Test\nThis is a test document for uploading."
+            resp = client.post(
+                "/upload",
+                headers={"x-api-key": "test-api-key-123"},
+                files={"files": ("test_doc.md", content, "text/markdown")},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["status"] == "ok"
+            assert data["total_saved"] == 1
+            assert len(data["errors"]) == 0
+            assert data["saved"][0]["filename"] == "test_doc.md"
+
+            # Verify file was actually saved.
+            saved_path = api.KB_RAW / "test_doc.md"
+            assert saved_path.exists()
+            assert saved_path.read_bytes() == content
+        finally:
+            api.KB_RAW = original_kb
+
+    def test_upload_rejects_unsupported_format(self, client: TestClient) -> None:
+        """Uploading an unsupported file format should report an error."""
+        resp = client.post(
+            "/upload",
+            headers={"x-api-key": "test-api-key-123"},
+            files={"files": ("bad_file.exe", b"fake exe content", "application/octet-stream")},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_saved"] == 0
+        assert data["total_errors"] == 1
+        assert "Unsupported format" in data["errors"][0]["error"]
+
+    def test_upload_empty_file_rejected(self, client: TestClient, tmp_path) -> None:
+        """Uploading an empty file should report an error."""
+        import copilot.serving.api as api
+
+        original_kb = api.KB_RAW
+        api.KB_RAW = tmp_path / "kb_empty"
+        api.KB_RAW.mkdir(parents=True, exist_ok=True)
+        try:
+            resp = client.post(
+                "/upload",
+                headers={"x-api-key": "test-api-key-123"},
+                files={"files": ("empty.md", b"", "text/markdown")},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["total_saved"] == 0
+            assert "Empty file" in data["errors"][0]["error"]
+        finally:
+            api.KB_RAW = original_kb
+
+    def test_upload_multiple_files(self, client: TestClient, tmp_path) -> None:
+        """Uploading multiple valid files should save all of them."""
+        import copilot.serving.api as api
+
+        original_kb = api.KB_RAW
+        api.KB_RAW = tmp_path / "kb_multi"
+        api.KB_RAW.mkdir(parents=True, exist_ok=True)
+        try:
+            resp = client.post(
+                "/upload",
+                headers={"x-api-key": "test-api-key-123"},
+                files=[
+                    ("files", ("doc1.md", b"# Doc 1", "text/markdown")),
+                    ("files", ("doc2.txt", b"Doc 2 content", "text/plain")),
+                    ("files", ("doc3.csv", b"a,b,c\n1,2,3", "text/csv")),
+                ],
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["total_saved"] == 3
+            assert data["total_errors"] == 0
+        finally:
+            api.KB_RAW = original_kb
+
+    def test_build_requires_api_key(self, client: TestClient) -> None:
+        """Build index without API key should return 401 or 503."""
+        resp = client.post("/upload/build")
+        assert resp.status_code in (401, 503)

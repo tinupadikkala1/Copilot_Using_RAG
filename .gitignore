@@ -1,0 +1,38 @@
+# --- Virtual Environment ---
+.venv/
+venv/
+env/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+
+# --- Data & DB ---
+data/chroma/
+data/*.db
+*.db
+*.sqlite
+*.sqlite3
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Environment / Secrets ---
+.env
+.env.*
+
+# --- Project specific ---
+.freebuff/

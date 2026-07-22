@@ -26,7 +26,7 @@ class Embedder:
         self,
         base_url: str | None = None,
         model: str | None = None,
-        timeout: float = 60.0,
+        timeout: float = 600.0,
     ) -> None:
         settings = get_settings()
         self._base_url = (base_url or settings.ollama_base_url).rstrip("/")

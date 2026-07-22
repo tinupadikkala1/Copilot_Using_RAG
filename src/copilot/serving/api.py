@@ -217,7 +217,7 @@ def create_app() -> FastAPI:
         if not KB_RAW.exists() or not any(KB_RAW.iterdir()):
             return {"status": "ok", "documents_loaded": 0, "chunks_indexed": 0}
 
-        embedder = Embedder()
+        embedder = Embedder(timeout=600.0)
         store = ChromaStore(persist_dir="data/chroma")
         # Get the cached retriever (if any) so BM25 is updated after build.
         from copilot.serving.deps import get_pipeline

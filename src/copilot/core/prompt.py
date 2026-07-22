@@ -77,24 +77,3 @@ def build_rag_prompt(
         {"role": "system", "content": SYSTEM_PROMPT_WITH_EXAMPLES},
         {"role": "user", "content": user_section},
     ]
-
-
-def build_rag_prompt(query: str, contexts: list[RetrievedChunk]) -> list[dict[str, str]]:
-    """Build a chat-style message list with numbered context for the LLM.
-
-    Args:
-        query: The user's question.
-        contexts: Top-k retrieved chunks to ground the answer.
-
-    Returns:
-        A list of dicts with ``"role"`` and ``"content"`` keys, compatible
-        with Ollama's ``/api/chat`` endpoint.
-    """
-    numbered = "\n\n".join(
-        f"[{i + 1}] (source: {rc.chunk.title})\n{rc.chunk.text}" for i, rc in enumerate(contexts)
-    )
-    user = f"CONTEXT:\n{numbered}\n\n" f"QUESTION: {query}\n\n" f"Grounded answer with citations:"
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT_WITH_EXAMPLES},
-        {"role": "user", "content": user},
-    ]

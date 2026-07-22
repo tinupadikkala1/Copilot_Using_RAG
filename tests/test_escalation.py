@@ -56,12 +56,17 @@ class TestShouldEscalate:
         assert decision.reason == "low_intent_confidence"
 
     def test_sensitive_intent_low_groundedness(self) -> None:
-        """Billing intent with groundedness under 0.75 should escalate."""
+        """Billing intent with groundedness under 0.75 should escalate.
+
+        With per-intent thresholds (billing min_groundedness=0.65),
+        groundedness=0.7 passes the general check but triggers the
+        sensitive intent guard (0.7 < 0.75).
+        """
         decision = should_escalate(
             intent="billing",
             intent_confidence=0.8,
             retrieval_score=0.7,
-            groundedness=0.6,
+            groundedness=0.7,
         )
         assert decision.escalate
         assert decision.reason == "sensitive_intent_needs_review"

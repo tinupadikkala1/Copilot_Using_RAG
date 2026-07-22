@@ -72,16 +72,53 @@ def _tokens(text: str) -> set[str]:
     return set(_TOKEN.findall(text.lower()))
 
 
-def groundedness_score(answer: str, contexts: list[RetrievedChunk]) -> float:
-    """Lexical-overlap groundedness: fraction of answer tokens present in context.
+# Synonym groups for relaxing token-matching in groundedness scoring.
+_SYNONYM_GROUPS: list[set[str]] = [
+    {"refund", "money", "back", "reimburse", "return"},
+    {"password", "login", "signin", "sign", "in", "log", "authentication"},
+    {"account", "profile", "user", "username"},
+    {"email", "mail", "inbox", "gmail", "outlook"},
+    {"delete", "remove", "close", "cancel", "terminate"},
+    {"upgrade", "downgrade", "change", "switch", "plan"},
+    {"error", "bug", "crash", "freeze", "fail", "broken"},
+    {"help", "support", "assist", "guide", "tutorial"},
+]
+
+# Pre-build a synonym-expanded lookup.
+_SYNONYM_MAP: dict[str, set[str]] = {}
+for group in _SYNONYM_GROUPS:
+    for word in group:
+        _SYNONYM_MAP.setdefault(word, set()).update(group - {word})
+
+
+def _expand_with_synonyms(tokens: set[str]) -> set[str]:
+    """Expand a set of tokens with their synonyms from the predefined groups."""
+    expanded = set(tokens)
+    for t in tokens:
+        if t in _SYNONYM_MAP:
+            expanded.update(_SYNONYM_MAP[t])
+    return expanded
+
+
+def groundedness_score(
+    answer: str,
+    contexts: list[RetrievedChunk],
+    use_synonyms: bool = True,
+) -> float:
+    """Lexical-overlap groundedness with optional synonym-awareness.
 
     A lightweight, dependency-free proxy suitable for the local stack.
     Returns a value in [0, 1]; the pipeline escalates when it falls below
     the threshold.
 
+    When ``use_synonyms`` is True, the scoring also checks for semantically
+    equivalent terms (e.g. "refund" ↔ "money back") using predefined
+    synonym groups.
+
     Args:
         answer: The LLM-generated answer text.
         contexts: The retrieved chunks used as context.
+        use_synonyms: Whether to relax matching with synonym groups.
 
     Returns:
         A score in [0, 1] representing how much of the answer is
@@ -94,9 +131,14 @@ def groundedness_score(answer: str, contexts: list[RetrievedChunk]) -> float:
     if not answer_tokens:
         return 0.0
 
+    # Expand answer tokens with synonyms if enabled.
+    expanded_answer = _expand_with_synonyms(answer_tokens) if use_synonyms else answer_tokens
+
     context_tokens: set[str] = set()
     for rc in contexts:
         context_tokens |= _tokens(rc.chunk.text)
 
-    supported = answer_tokens & context_tokens
-    return len(supported) / len(answer_tokens)
+    expanded_context = _expand_with_synonyms(context_tokens) if use_synonyms else context_tokens
+
+    supported = expanded_answer & expanded_context
+    return min(1.0, len(supported) / len(answer_tokens))  # cap at 1.0

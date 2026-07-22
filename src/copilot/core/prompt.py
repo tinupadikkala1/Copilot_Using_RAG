@@ -40,6 +40,44 @@ SYSTEM_PROMPT = (
 
 SYSTEM_PROMPT_WITH_EXAMPLES = SYSTEM_PROMPT + f"\n\nHere are examples of ideal answers:\n{FEW_SHOT_EXAMPLES}"
 
+# Chain-of-thought instruction: the LLM is asked to reason before answering.
+COT_INSTRUCTION = (
+    "\n\nIMPORTANT: Before writing your answer, think step by step. "
+    "First, identify which numbered passages contain information relevant to the question. "
+    "Then, write your answer citing those passages. "
+    "This reasoning is for your internal use; the user sees only your final answer."
+)
+
+
+def build_rag_prompt(
+    query: str,
+    contexts: list[RetrievedChunk],
+    use_cot: bool = False,
+) -> list[dict[str, str]]:
+    """Build a chat-style message list with numbered context for the LLM.
+
+    Args:
+        query: The user's question.
+        contexts: Top-k retrieved chunks to ground the answer.
+        use_cot: If True, include a chain-of-thought instruction
+                 before the answer.
+
+    Returns:
+        A list of dicts with ``"role"`` and ``"content"`` keys, compatible
+        with Ollama's ``/api/chat`` endpoint.
+    """
+    numbered = "\n\n".join(
+        f"[{i + 1}] (source: {rc.chunk.title})\n{rc.chunk.text}" for i, rc in enumerate(contexts)
+    )
+    user_section = f"CONTEXT:\n{numbered}\n\nQUESTION: {query}\n\n"
+    if use_cot:
+        user_section += COT_INSTRUCTION + "\n\n"
+    user_section += "Grounded answer with citations:"
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT_WITH_EXAMPLES},
+        {"role": "user", "content": user_section},
+    ]
+
 
 def build_rag_prompt(query: str, contexts: list[RetrievedChunk]) -> list[dict[str, str]]:
     """Build a chat-style message list with numbered context for the LLM.

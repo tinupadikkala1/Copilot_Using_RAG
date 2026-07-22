@@ -71,9 +71,20 @@ class TestGroundednessScore:
             "You will receive an email with a reset link."
         )
         # 'notify' and 'billing' are not present in the context.
+        # With synonyms disabled, only exact token matches count.
         answer = "Click Forgot password and notify the billing team."
-        score = groundedness_score(answer, ctx)
+        score = groundedness_score(answer, ctx, use_synonyms=False)
         assert 0.0 < score < 1.0, f"Expected partial groundedness, got {score:.2f}"
+
+    def test_partial_support_with_synonyms(self) -> None:
+        """With synonyms enabled, 'password' should match 'login' in context."""
+        ctx = _make_context(
+            "To reset your password, click Forgot password on the login page."
+        )
+        # 'password' has synonyms like 'login' which IS in context.
+        answer = "Click Forgot password."
+        score = groundedness_score(answer, ctx, use_synonyms=True)
+        assert score >= 0.5, f"Expected high groundedness with synonyms, got {score:.2f}"
 
     def test_empty_answer_returns_zero(self) -> None:
         """An empty answer should return 0.0."""

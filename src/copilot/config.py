@@ -11,17 +11,18 @@ class Settings(BaseSettings):
     # --- Ollama backend ---
     ollama_base_url: str = "http://localhost:11434"
     embedding_model: str = "nomic-embed-text"
-    llm_model: str = "qwen3:latest"
+    llm_model: str = "qwen-local:latest"
     llm_backend: str = "ollama"
 
     # --- Retrieval ---
-    retrieval_k: int = 5
+    retrieval_k: int = 3
     min_retrieval_score: float = 0.35
 
     # --- Groundedness ---
     min_groundedness: float = 0.60
 
     # --- Intent ---
+    # Confidence threshold below which intent is 'unknown' (can be overridden per-intent)
     min_intent_confidence: float = 0.35
 
     # --- Chunking ---

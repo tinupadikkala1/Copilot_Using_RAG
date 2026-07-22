@@ -12,6 +12,9 @@ from copilot.branding import render_submission_header
 API_URL = os.environ.get("COPILOT_API_URL", "http://localhost:8000")
 API_KEY = os.environ.get("COPILOT_API_KEY", "")
 
+# Get current page name for highlighting active link.
+_CURRENT_PAGE = "chat"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,6 +48,18 @@ def _send_feedback(data: dict, rating: str) -> None:
         )
 
 
+def _nav_link(label: str, page: str, icon: str, is_active: bool) -> str:
+    """Return an HTML sidebar nav link with active state styling."""
+    if page == "dashboard":
+        port = 8502
+    elif page == "upload":
+        port = 8503
+    else:
+        port = 8501
+    active = "background-color: rgba(255,255,255,0.1); border-radius: 4px;" if is_active else ""
+    return f'<div style="padding: 0.25rem 0.5rem; margin: 0.1rem 0; {active}"><a href="http://localhost:{port}" target="_self" style="text-decoration: none; color: inherit; font-size: 1rem;">{icon} {label}</a></div>'
+
+
 # ---------------------------------------------------------------------------
 # Page config (must be the first Streamlit command)
 # ---------------------------------------------------------------------------
@@ -60,9 +75,12 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 
 st.sidebar.title("🤖 Copilot")
-st.sidebar.page_link("chat_app.py", label="💬 Chat", icon="💬")
-st.sidebar.page_link("upload.py", label="📤 Upload KB", icon="📤")
-st.sidebar.page_link("dashboard.py", label="📊 Dashboard", icon="📊")
+st.sidebar.markdown(
+    _nav_link("Chat", "chat_app", "💬", True) +
+    _nav_link("Upload KB", "upload", "📤", False) +
+    _nav_link("Dashboard", "dashboard", "📊", False),
+    unsafe_allow_html=True,
+)
 st.sidebar.divider()
 st.sidebar.caption(
     "Upload your own support documents on the **Upload KB** page "
@@ -112,8 +130,8 @@ if prompt := st.chat_input("Ask a question about your account, billing, or how-t
 
     # Append citations if present.
     if data["citations"]:
-        cites = "  \n".join(f"[{c['marker']}] {c['title']}" for c in data["citations"])
-        answer += f"\n\n---\n**Sources:**  \n{cites}"
+        cites = "  \\n".join(f"[{c['marker']}] {c['title']}" for c in data["citations"])
+        answer += f"\\n\\n---\\n**Sources:**  \\n{cites}"
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):

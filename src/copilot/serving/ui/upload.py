@@ -29,6 +29,8 @@ SUPPORTED_FORMATS = {
 MAX_FILE_SIZE_MB = 20
 MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
 
+_CURRENT_PAGE = "upload"
+
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -40,14 +42,30 @@ st.set_page_config(
     layout="centered",
 )
 
+
+def _nav_link(label: str, page: str, icon: str, is_active: bool) -> str:
+    """Return an HTML sidebar nav link with active state styling."""
+    if page == "dashboard":
+        port = 8502
+    elif page == "upload":
+        port = 8503
+    else:
+        port = 8501
+    active = "background-color: rgba(255,255,255,0.1); border-radius: 4px;" if is_active else ""
+    return f'<div style="padding: 0.25rem 0.5rem; margin: 0.1rem 0; {active}"><a href="http://localhost:{port}" target="_self" style="text-decoration: none; color: inherit; font-size: 1rem;">{icon} {label}</a></div>'
+
+
 # ---------------------------------------------------------------------------
 # Sidebar navigation
 # ---------------------------------------------------------------------------
 
 st.sidebar.title("🤖 Copilot")
-st.sidebar.page_link("chat_app.py", label="💬 Chat", icon="💬")
-st.sidebar.page_link("upload.py", label="📤 Upload KB", icon="📤")
-st.sidebar.page_link("dashboard.py", label="📊 Dashboard", icon="📊")
+st.sidebar.markdown(
+    _nav_link("Chat", "chat_app", "💬", False) +
+    _nav_link("Upload KB", "upload", "📤", True) +
+    _nav_link("Dashboard", "dashboard", "📊", False),
+    unsafe_allow_html=True,
+)
 
 render_submission_header()
 st.title("📤 Upload Knowledge Base Documents")

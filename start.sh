@@ -321,11 +321,12 @@ step "Step 6/6 — Launching Chat UI"
 export COPILOT_API_URL="http://localhost:$API_PORT"
 export COPILOT_API_KEY="$API_KEY"
 
-info "Starting Streamlit Chat UI..."
-info "  Chat UI:     http://localhost:$STREAMLIT_PORT"
-info "  Dashboard:   http://localhost:$((STREAMLIT_PORT + 1))"
-info "  API Server:  http://localhost:$API_PORT"
-info "  API Docs:    http://localhost:$API_PORT/docs"
+info "Starting all Streamlit UIs..."
+info "  💬 Chat:      http://localhost:$STREAMLIT_PORT"
+info "  📤 Upload KB: http://localhost:$((STREAMLIT_PORT + 2))"
+info "  📊 Dashboard: http://localhost:$((STREAMLIT_PORT + 1))"
+info "  📡 API:       http://localhost:$API_PORT"
+info "  📖 API Docs:  http://localhost:$API_PORT/docs"
 echo ""
 
 # Function to cleanup on exit (guard prevents double-run on SIGINT + EXIT)
@@ -346,7 +347,7 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-# Launch both UIs — pass PYTHONPATH inline (relative path avoids colon issues).
+# Launch all UIs — pass PYTHONPATH inline (relative path avoids colon issues).
 info "Starting Streamlit Chat UI (PID tracking)..."
 PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/chat_app.py \
     --server.port "$STREAMLIT_PORT" \
@@ -358,8 +359,18 @@ _ALL_PIDS+=("$CHAT_PID")
 
 sleep 3
 
-# Launch Dashboard in background
-info "Starting Dashboard (optional)..."
+info "Starting Upload KB page..."
+PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/upload.py \
+    --server.port "$((STREAMLIT_PORT + 2))" \
+    --server.headless true \
+    --browser.gatherUsageStats false \
+    2>&1 &
+UPLOAD_PID=$!
+_ALL_PIDS+=("$UPLOAD_PID")
+
+sleep 2
+
+info "Starting Dashboard..."
 PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/dashboard.py \
     --server.port "$((STREAMLIT_PORT + 1))" \
     --server.headless true \
@@ -379,9 +390,10 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║                                                              ║${NC}"
 echo -e "${GREEN}║   🚀  Copilot is running!                                    ║${NC}"
 echo -e "${GREEN}║                                                              ║${NC}"
-echo -e "${GREEN}║   💬 Chat UI:        http://localhost:${STREAMLIT_PORT}              ║${NC}"
+echo -e "${GREEN}║   💬 Chat:          http://localhost:${STREAMLIT_PORT}              ║${NC}"
+echo -e "${GREEN}║   📤 Upload KB:     http://localhost:$((STREAMLIT_PORT + 2))              ║${NC}"
 echo -e "${GREEN}║   📊 Dashboard:     http://localhost:$((STREAMLIT_PORT + 1))              ║${NC}"
-echo -e "${GREEN}║   📡 API Server:    http://localhost:${API_PORT}                ║${NC}"
+echo -e "${GREEN}║   📡 API:           http://localhost:${API_PORT}                ║${NC}"
 echo -e "${GREEN}║   📖 API Docs:      http://localhost:${API_PORT}/docs           ║${NC}"
 echo -e "${GREEN}║                                                              ║${NC}"
 echo -e "${GREEN}║   🔑 API Key:       ${API_KEY}                    ║${NC}"

@@ -21,7 +21,7 @@
 #    --help            Show this help message
 # =============================================================================
 
-set -euo pipefail
+set -uo pipefail
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Config
@@ -292,21 +292,25 @@ PYTHONPATH="src" $PYTHON -m uvicorn copilot.serving.api:app \
     --log-level warning \
     &
 API_PID=$!
-_ALL_PIDS+=("$API_PID")
-
-# Wait for API to be ready
+_ALL_PIDS+=("$API_PID")    # Wait for API to be ready
 info "Waiting for API server to be ready..."
+API_READY=false
 for i in $(seq 1 30); do
     if curl -s "http://localhost:$API_PORT/healthz" &>/dev/null; then
         ok "API server is running (PID: $API_PID) at http://localhost:$API_PORT"
+        API_READY=true
         break
-    fi
-    if [[ $i -eq 30 ]]; then
-        err "API server failed to start within 30 seconds"
-        err "Check the logs with: curl http://localhost:$API_PORT/healthz"
     fi
     sleep 1
 done
+
+if ! $API_READY; then
+    err "API server failed to start within 30 seconds."
+    err "Check if port $API_PORT is available or run manually:"
+    err "  COPILOT_API_KEY=$API_KEY PYTHONPATH=src $PYTHON -m uvicorn copilot.serving.api:app --host 0.0.0.0 --port $API_PORT"
+    info "Continuing anyway — you can start the chat UI manually with:"
+    info "  COPILOT_API_KEY=$API_KEY COPILOT_API_URL=http://localhost:$API_PORT PYTHONPATH=src $PYTHON -m streamlit run src/copilot/serving/ui/chat_app.py"
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Step 6: Launch the Streamlit UI

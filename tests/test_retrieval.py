@@ -90,9 +90,9 @@ class TestEmbedder:
         )
         sim_similar = float(vecs[0] @ vecs[1])  # dot product of normalized vectors
         sim_unrelated = float(vecs[0] @ vecs[2])
-        assert sim_similar > sim_unrelated, (
-            f"Similar ({sim_similar:.3f}) should be closer than unrelated ({sim_unrelated:.3f})"
-        )
+        assert (
+            sim_similar > sim_unrelated
+        ), f"Similar ({sim_similar:.3f}) should be closer than unrelated ({sim_unrelated:.3f})"
 
 
 # ---------------------------------------------------------------------------

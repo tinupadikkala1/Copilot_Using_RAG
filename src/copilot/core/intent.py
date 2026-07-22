@@ -103,7 +103,8 @@ class IntentClassifier:
         if confidence < self._min_confidence:
             logger.debug(
                 "Low-confidence intent (%.3f < %.3f); returning 'unknown'",
-                confidence, self._min_confidence,
+                confidence,
+                self._min_confidence,
             )
             return "unknown", confidence
         return self._labels[idx], confidence

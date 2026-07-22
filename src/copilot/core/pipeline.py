@@ -117,8 +117,15 @@ class SupportPipeline:
                 citations: list[Citation] = []
             else:
                 messages = build_rag_prompt(query, contexts, use_cot=False)
-                llm_answer = self._llm.generate(messages)
-                answer = _LOW_CONFIDENCE_ANSWER + llm_answer
+                llm_answer = self._llm.generate(messages) or ""
+                # Avoid double "I don't have enough information" when the
+                # LLM follows its instruction to output the exact refusal.
+                if llm_answer.strip().startswith(
+                    "I don't have enough information"
+                ):
+                    answer = llm_answer
+                else:
+                    answer = _LOW_CONFIDENCE_ANSWER + llm_answer
                 citations = self._extract_citations(answer, contexts)
             resp = ChatResponse(
                 answer=answer,

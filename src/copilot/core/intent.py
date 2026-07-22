@@ -129,12 +129,17 @@ class IntentClassifier:
 
     Uses nearest-centroid over pre-computed embedding centroids for
     each intent. Returns ``"unknown"`` if no centroid is close enough.
+
+    The ``last_query_vector`` property exposes the embedding vector from
+    the most recent ``predict()`` call so downstream components (e.g.
+    the retriever) can reuse it without a duplicate embed API call.
     """
 
     def __init__(self, embedder: Embedder, min_confidence: float = 0.35) -> None:
         self._embedder = embedder
         self._min_confidence = min_confidence
         self._labels: list[str] = list(INTENT_EXAMPLES.keys())
+        self._last_query_vector: list[float] | None = None
 
         # Pre-compute normalised centroid vectors for each intent.
         centroids = []
@@ -151,6 +156,11 @@ class IntentClassifier:
             min_confidence,
         )
 
+    @property
+    def last_query_vector(self) -> list[float] | None:
+        """Return the embedding vector from the most recent predict() call."""
+        return self._last_query_vector
+
     def predict(self, query: str) -> tuple[str, float]:
         """Return ``(intent_label, confidence)`` with confidence in [0, 1].
 
@@ -162,6 +172,7 @@ class IntentClassifier:
             confidence is below the threshold.
         """
         vec = self._embedder.encode([query])[0]
+        self._last_query_vector = vec.tolist() if vec is not None else None
         sims = self._centroids @ vec  # cosine (both L2-normalised)
         idx = int(np.argmax(sims))
         # Map cosine [-1, 1] -> confidence [0, 1].

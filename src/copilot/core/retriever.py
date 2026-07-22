@@ -23,12 +23,16 @@ class Retriever:
         self._store = store
         self._embedder = embedder
 
-    def retrieve(self, query: str, k: int = 5) -> list[RetrievedChunk]:
+    def retrieve(self, query: str, k: int = 5, query_vector: list[float] | None = None) -> list[RetrievedChunk]:
         """Embed the query and return the top-k most similar chunks.
+
+        If ``query_vector`` is provided, it is used directly instead of
+        encoding the query, saving one Ollama embed call.
 
         Args:
             query: The user's question or search query.
             k: Number of results to return.
+            query_vector: Optional pre-computed query embedding vector.
 
         Returns:
             List of RetrievedChunk objects sorted by descending similarity.
@@ -38,8 +42,11 @@ class Retriever:
         """
         if not query.strip():
             raise ValueError("query must be non-empty")
-        vector = self._embedder.encode([query])[0].tolist()
-        results = self._store.query(vector, k)
+        if query_vector is not None:
+            results = self._store.query(query_vector, k)
+        else:
+            vector = self._embedder.encode([query])[0].tolist()
+            results = self._store.query(vector, k)
         logger.debug("Retrieved %d chunks for query", len(results))
         return results
 

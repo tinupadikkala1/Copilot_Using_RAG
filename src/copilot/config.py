@@ -15,11 +15,11 @@ class Settings(BaseSettings):
     llm_backend: str = "ollama"
 
     # --- Retrieval ---
-    retrieval_k: int = 3
-    min_retrieval_score: float = 0.35
+    retrieval_k: int = 5  # retrieve more chunks for better context
+    min_retrieval_score: float = 0.10
 
     # --- Groundedness ---
-    min_groundedness: float = 0.60
+    min_groundedness: float = 0.20
 
     # --- Intent ---
     # Confidence threshold below which intent is 'unknown' (can be overridden per-intent)

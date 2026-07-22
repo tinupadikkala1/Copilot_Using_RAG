@@ -21,52 +21,56 @@ class EscalationDecision:
 
 
 # Per-intent dynamic thresholds for escalation.
-# These override the global defaults for specific intents.
-# Tighter thresholds = more escalations (cautious).
-# Looser thresholds = more auto-resolutions (confident).
+#
+# NOTE: All thresholds are set very permissive because there is no human
+# queue — the system should always answer with the best information it
+# has, rather than creating phantom tickets.
 _PER_INTENT_THRESHOLDS: dict[str, dict[str, float]] = {
     "billing": {
-        "min_retrieval": 0.40,      # More cautious with money
-        "min_groundedness": 0.65,
-        "min_intent_conf": 0.40,
+        "min_retrieval": 0.10,
+        "min_groundedness": 0.20,
+        "min_intent_conf": 0.10,
     },
     "human_agent": {
-        # Human agent requests always escalate, so thresholds don't matter much.
         "min_retrieval": 0.0,
         "min_groundedness": 0.0,
         "min_intent_conf": 0.0,
     },
     "technical": {
-        "min_retrieval": 0.30,       # More forgiving — technical issues vary widely
-        "min_groundedness": 0.55,
-        "min_intent_conf": 0.30,
+        "min_retrieval": 0.10,
+        "min_groundedness": 0.20,
+        "min_intent_conf": 0.10,
     },
     "how_to": {
-        "min_retrieval": 0.35,
-        "min_groundedness": 0.60,
-        "min_intent_conf": 0.35,
+        "min_retrieval": 0.10,
+        "min_groundedness": 0.20,
+        "min_intent_conf": 0.10,
     },
     "account": {
-        "min_retrieval": 0.35,
-        "min_groundedness": 0.60,
-        "min_intent_conf": 0.35,
+        "min_retrieval": 0.10,
+        "min_groundedness": 0.20,
+        "min_intent_conf": 0.10,
     },
     "unknown": {
-        "min_retrieval": 0.50,      # Unknown intents need strong retrieval
-        "min_groundedness": 0.70,
+        "min_retrieval": 0.05,
+        "min_groundedness": 0.10,
         "min_intent_conf": 0.0,
     },
 }
 
 
 class EscalationConfig:
-    """Holds escalation thresholds, with optional per-intent overrides."""
+    """Holds escalation thresholds, with optional per-intent overrides.
+
+    All thresholds are set low because there is no human queue — the
+    system should always attempt an answer instead of creating tickets.
+    """
 
     def __init__(
         self,
-        min_retrieval: float = 0.35,
-        min_groundedness: float = 0.60,
-        min_intent_conf: float = 0.35,
+        min_retrieval: float = 0.10,
+        min_groundedness: float = 0.20,
+        min_intent_conf: float = 0.10,
         per_intent: dict[str, dict[str, float]] | None = None,
     ) -> None:
         self.default_min_retrieval = min_retrieval

@@ -9,7 +9,7 @@ import time
 from copilot.analytics import metrics
 from copilot.analytics.db import init_db
 from copilot.core.cache import ResponseCache
-from copilot.core.escalation import create_ticket, should_escalate
+from copilot.core.escalation import should_escalate
 from copilot.core.generation import LLMClient
 from copilot.core.guards import groundedness_score, sanitize
 from copilot.core.intent import IntentClassifier
@@ -25,8 +25,17 @@ _CITE = re.compile(r"\[(\d+)\]")
 GREETING_REPLY = "Hi! I'm your support assistant. What can I help you with today?"
 
 # Minimum retrieval score to proceed with LLM generation.
-# Below this threshold we escalate immediately, saving the expensive LLM call.
-_MIN_RETRIEVAL_FOR_LLM = 0.25
+# Set very low so the LLM always gets a chance to answer.
+_MIN_RETRIEVAL_FOR_LLM = 0.05
+
+# Fallback answer when retrieval is too weak — still tries LLM but
+# acknowledges uncertainty. No ticket is created since there's no
+# human queue to handle it.
+_LOW_CONFIDENCE_ANSWER = (
+    "I don't have enough information in my knowledge base to give you a "
+    "confident answer to that. Here's what I can tell you based on "
+    "what I found:\n\n"
+)
 
 # Response cache for identical queries.
 _response_cache = ResponseCache(maxsize=128, ttl_s=300.0)
@@ -101,18 +110,22 @@ class SupportPipeline:
         contexts = self._retrieve_with_hyde(query, intent, intent_conf)
         retrieval_top = Retriever.top_score(contexts)
 
-        # --- Early exit: skip LLM if retrieval is too weak ---
+        # --- Low-retrieval path: still try the LLM, but with a caveat ---
         if retrieval_top < _MIN_RETRIEVAL_FOR_LLM:
-            ticket_id = create_ticket(session_id, query, "low_retrieval")
-            answer = (
-                "I couldn't find relevant information in our knowledge base to answer that. "
-                f"I've created ticket {ticket_id} and a human agent will follow up shortly."
-            )
+            if not contexts:
+                answer = "I don't have enough information in my knowledge base to answer that."
+                citations: list[Citation] = []
+            else:
+                messages = build_rag_prompt(query, contexts, use_cot=False)
+                llm_answer = self._llm.generate(messages)
+                answer = _LOW_CONFIDENCE_ANSWER + llm_answer
+                citations = self._extract_citations(answer, contexts)
             resp = ChatResponse(
                 answer=answer,
                 intent=intent,
-                escalated=True,
-                confidence=retrieval_top,
+                citations=citations,
+                escalated=False,
+                confidence=min(retrieval_top * 2, 0.5),
                 session_id=session_id,
             )
             metrics.record_turn(resp, (time.perf_counter() - started) * 1000)
@@ -132,21 +145,20 @@ class SupportPipeline:
             min_groundedness=self._min_groundedness,
         )
 
+        # Always extract citations — we return the answer regardless of escalation.
+        citations = self._extract_citations(answer, contexts)
+
         if decision.escalate:
-            ticket_id = create_ticket(session_id, query, decision.reason)
-            answer = (
-                "This looks like it needs a specialist. I've created ticket "
-                f"{ticket_id} and a human agent will follow up shortly."
-            )
+            # No human queue exists — give the best answer we have instead.
             resp = ChatResponse(
                 answer=answer,
+                citations=citations,
                 intent=intent,
-                escalated=True,
-                confidence=min(intent_conf, grounded),
+                escalated=False,
+                confidence=min(intent_conf, grounded, 0.5),
                 session_id=session_id,
             )
         else:
-            citations = self._extract_citations(answer, contexts)
             resp = ChatResponse(
                 answer=answer,
                 citations=citations,

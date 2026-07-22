@@ -28,8 +28,15 @@ def get_vector_store() -> ChromaStore:
 
 @functools.lru_cache(maxsize=1)
 def get_retriever() -> Retriever:
-    """Return a cached Retriever singleton."""
-    return Retriever(store=get_vector_store(), embedder=get_embedder())
+    """Return a cached Retriever singleton, populating its BM25 index
+    from any chunks already in the vector store."""
+    retriever = Retriever(store=get_vector_store(), embedder=get_embedder())
+    # Populate BM25 index from existing chunks (if any).
+    store = get_vector_store()
+    chunks = store.get_all_chunks()
+    if chunks:
+        retriever.rebuild_bm25(chunks)
+    return retriever
 
 
 @functools.lru_cache(maxsize=1)

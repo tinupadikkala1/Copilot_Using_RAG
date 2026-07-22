@@ -76,11 +76,14 @@ class SupportPipeline:
         # --- Check response cache ---
         cache_key = query.lower().strip()
         cached = _response_cache.get(cache_key)
-        if cached is not None and cached["session_id"] == session_id:
+        if cached is not None:
             logger.debug("Returning cached response for key=%s", cache_key[:40])
-            return ChatResponse(**cached)
+            cached_resp = ChatResponse(**cached)
+            cached_resp.session_id = session_id
+            return cached_resp
 
-        intent, intent_conf = self._intent.predict(query)
+        # --- Intent classification (two-stage: centroid + optional LLM fallback) ---
+        intent, intent_conf = self._intent.predict(query, llm_fallback=self._llm)
 
         # --- Smalltalk / greeting shortcut ---
         route_decision = route(intent, intent_conf, 1.0)
@@ -94,9 +97,8 @@ class SupportPipeline:
             metrics.record_turn(resp, (time.perf_counter() - started) * 1000)
             return resp
 
-        # --- Retrieve relevant context (reuse query vector from intent) ---
-        query_vec = self._intent.last_query_vector
-        contexts = self._retriever.retrieve(query, self._k, query_vector=query_vec)
+        # --- HyDE: generate a hypothetical answer to improve retrieval ---
+        contexts = self._retrieve_with_hyde(query, intent, intent_conf)
         retrieval_top = Retriever.top_score(contexts)
 
         # --- Early exit: skip LLM if retrieval is too weak ---
@@ -116,10 +118,10 @@ class SupportPipeline:
             metrics.record_turn(resp, (time.perf_counter() - started) * 1000)
             return resp
 
-        # --- Generate grounded answer ---
-        messages = build_rag_prompt(query, contexts)
+        # --- Generate grounded answer (with CoT for better accuracy) ---
+        messages = build_rag_prompt(query, contexts, use_cot=True)
         answer = self._llm.generate(messages)
-        grounded = groundedness_score(answer, contexts)
+        grounded = groundedness_score(answer, contexts, use_synonyms=True)
 
         # --- Check escalation ---
         decision = should_escalate(
@@ -152,7 +154,6 @@ class SupportPipeline:
                 confidence=grounded,
                 session_id=session_id,
             )
-            # Only cache successful (non-escalated) responses.
             _response_cache.put(cache_key, resp.model_dump())
 
         latency_ms = (time.perf_counter() - started) * 1000
@@ -165,6 +166,65 @@ class SupportPipeline:
         )
         metrics.record_turn(resp, latency_ms)
         return resp
+
+    # --- HyDE: Hypothetical Document Embeddings for better retrieval ---
+
+    def _retrieve_with_hyde(
+        self,
+        query: str,
+        intent: str,
+        intent_conf: float,
+    ) -> list:
+        """Retrieve context, optionally using HyDE (Hypothetical Document
+        Embeddings) when confidence is high enough.
+
+        HyDE generates a hypothetical answer first, then embeds THAT for
+        retrieval instead of the raw query. This bridges the lexical gap
+        between short user queries and long KB documents.
+
+        For low-confidence or simple intents, falls back to normal retrieval
+        reusing the intent classifier's query vector (batch embed).
+        """
+        query_vec = self._intent.last_query_vector
+
+        # Use HyDE for non-trivial queries to improve retrieval.
+        use_hyde = intent_conf >= 0.5 and intent not in ("greeting", "human_agent")
+
+        if use_hyde and self._llm is not None:
+            try:
+                hyde_prompt = (
+                    f"Write a brief hypothetical support article that answers this question:\n"
+                    f"{query}\n\n"
+                    f"Use a helpful, factual tone. Write 2-3 sentences."
+                )
+                hyde_messages = [
+                    {"role": "system", "content": "You are a knowledge base writer."},
+                    {"role": "user", "content": hyde_prompt},
+                ]
+                hyde_answer = self._llm.generate(hyde_messages, temperature=0.3)
+                if hyde_answer and len(hyde_answer) > 20:
+                    logger.debug(
+                        "HyDE generated hypothetical doc (%d chars) for query",
+                        len(hyde_answer),
+                    )
+                    # Embed the hypothetical doc and use that for retrieval.
+                    hyde_vec = self._retriever.embedder.encode([hyde_answer])[0].tolist()
+                    contexts = self._retriever.retrieve(query, self._k, query_vector=hyde_vec)
+                    logger.debug(
+                        "HyDE retrieval returned %d chunks (score=%.3f)",
+                        len(contexts),
+                        Retriever.top_score(contexts),
+                    )
+                    # If HyDE returned good results, use them.
+                    if contexts and Retriever.top_score(contexts) > 0.15:
+                        return contexts
+                    # Otherwise fall through to normal retrieval.
+            except Exception:
+                logger.debug("HyDE generation failed, using direct query", exc_info=True)
+
+        # Normal retrieval (reuse intent embed vector).
+        contexts = self._retriever.retrieve(query, self._k, query_vector=query_vec)
+        return contexts
 
     @staticmethod
     def _extract_citations(

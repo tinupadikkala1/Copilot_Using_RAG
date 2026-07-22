@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from copilot.indexing.embedder import Embedder
-from copilot.indexing.vector_store import VectorStore
+from copilot.indexing.vector_store import ChromaStore, VectorStore
 from copilot.ingestion.chunker import chunk_document, dedupe_chunks
 from copilot.ingestion.loaders import load_documents
 
@@ -20,6 +20,8 @@ def build_index(
     chunk_size: int = 800,
     overlap: int = 150,
     batch_size: int = 128,
+    *,
+    retriever=None,
 ) -> int:
     """Build/refresh the vector index.
 
@@ -33,6 +35,8 @@ def build_index(
         chunk_size: Maximum characters per chunk.
         overlap: Overlap characters between consecutive chunks.
         batch_size: Number of chunks to embed and upsert per batch.
+        retriever: Optional Retriever instance. If provided, the BM25 index
+                   is refreshed after the vector store is updated.
 
     Returns:
         Number of chunks indexed.
@@ -49,6 +53,15 @@ def build_index(
         batch = unique[i : i + batch_size]
         vectors = embedder.encode([c.text for c in batch]).tolist()
         store.upsert(batch, vectors)
+
+    # Refresh BM25 index if a retriever was provided.
+    if retriever is not None and hasattr(store, "get_all_chunks"):
+        try:
+            all_stored = store.get_all_chunks()
+            retriever.rebuild_bm25(all_stored)
+            logger.info("BM25 index refreshed with %d chunks", len(all_stored))
+        except Exception:
+            logger.exception("Failed to refresh BM25 index")
 
     logger.info("Index build complete: %d chunks", len(unique))
     return len(unique)

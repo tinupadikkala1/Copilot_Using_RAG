@@ -211,17 +211,25 @@ def create_app() -> FastAPI:
         """Build/refresh the vector index from all files in data/kb_raw/.
 
         Requires ``X-API-Key`` header. Returns the number of documents
-        loaded and chunks indexed.
+        loaded and chunks indexed. Also refreshes the BM25 index for
+        hybrid search.
         """
         if not KB_RAW.exists() or not any(KB_RAW.iterdir()):
             return {"status": "ok", "documents_loaded": 0, "chunks_indexed": 0}
 
         embedder = Embedder()
         store = ChromaStore(persist_dir="data/chroma")
+        # Get the cached retriever (if any) so BM25 is updated after build.
+        from copilot.serving.deps import get_pipeline
+
+        pipeline = get_pipeline()
+        retriever = pipeline._retriever if hasattr(pipeline, "_retriever") else None
+
         chunks_count = build_index(
             kb_root=KB_RAW,
             store=store,
             embedder=embedder,
+            retriever=retriever,
         )
         docs_count = len(list(KB_RAW.iterdir()))
 

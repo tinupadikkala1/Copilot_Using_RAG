@@ -115,3 +115,34 @@ class ChromaStore:
     def count(self) -> int:
         """Return the total number of chunks in the store."""
         return self._col.count()
+
+    def get_all_chunks(self) -> list[Chunk]:
+        """Return all chunks currently stored in the collection.
+
+        Useful for populating the BM25 index for hybrid search.
+
+        Returns:
+            List of all Chunk objects in the store.
+        """
+        all_data = self._col.get()
+        ids: list[str] = all_data.get("ids", [])
+        docs: list[str] = all_data.get("documents", [])
+        metas: list[dict | None] = all_data.get("metadatas", [])
+
+        chunks: list[Chunk] = []
+        for cid, text, meta in zip(ids, docs, metas):
+            if meta is None:
+                continue
+            chunks.append(
+                Chunk(
+                    chunk_id=cid,
+                    doc_id=str(meta.get("doc_id", "")),
+                    title=str(meta.get("title", "")),
+                    text=text,
+                    ordinal=int(meta.get("ordinal", 0)),
+                    content_hash=str(meta.get("content_hash", "")),
+                    source_path=str(meta.get("source_path", "")),
+                )
+            )
+        logger.debug("get_all_chunks returned %d chunks", len(chunks))
+        return chunks

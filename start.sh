@@ -35,6 +35,10 @@ API_PORT=8000
 KB_DIR=""
 STREAMLIT_PORT=8501
 
+# Track child process PIDs for cleanup (declare early — used in Step 5+6).
+_ALL_PIDS=()
+_CLEANING=false
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Colors for output
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,14 +240,12 @@ if [[ -z "$KB_DIR" ]]; then
     fi
 fi
 
-export PYTHONPATH="$SCRIPT_DIR/src"
-
 if [[ -d "$KB_DIR" ]] && [[ "$(find "$KB_DIR" -type f 2>/dev/null | wc -l)" -gt 0 ]]; then
     info "Building index from: $KB_DIR"
     mkdir -p data/chroma
 
-    # Build index with timeout handling
-    if $PYTHON scripts/build_index.py --kb-root "$KB_DIR" --persist-dir data/chroma 2>&1; then
+    # Build index — use relative PYTHONPATH (avoids colon-in-pathname parsing issues).
+    if PYTHONPATH="src" $PYTHON scripts/build_index.py --kb-root "$KB_DIR" --persist-dir data/chroma 2>&1; then
         ok "Vector index built successfully"
     else
         warn "Index build had issues. You can rebuild from the Upload KB page."
@@ -281,11 +283,11 @@ _kill_port() {
 _kill_port "$API_PORT"
 
 export COPILOT_API_KEY="$API_KEY"
-export PYTHONPATH="$SCRIPT_DIR/src"
 
 info "Starting FastAPI server on port $API_PORT..."
 
-$PYTHON -m uvicorn copilot.serving.api:app \
+# Pass PYTHONPATH inline (relative path avoids colon-in-directory-name issues).
+PYTHONPATH="src" $PYTHON -m uvicorn copilot.serving.api:app \
     --host 0.0.0.0 --port "$API_PORT" \
     --log-level warning \
     &
@@ -314,7 +316,6 @@ step "Step 6/6 — Launching Chat UI"
 
 export COPILOT_API_URL="http://localhost:$API_PORT"
 export COPILOT_API_KEY="$API_KEY"
-export PYTHONPATH="$SCRIPT_DIR/src"
 
 info "Starting Streamlit Chat UI..."
 info "  Chat UI:     http://localhost:$STREAMLIT_PORT"
@@ -322,10 +323,6 @@ info "  Dashboard:   http://localhost:$((STREAMLIT_PORT + 1))"
 info "  API Server:  http://localhost:$API_PORT"
 info "  API Docs:    http://localhost:$API_PORT/docs"
 echo ""
-
-# Track PIDs so cleanup can kill them
-_ALL_PIDS=()
-_CLEANING=false
 
 # Function to cleanup on exit (guard prevents double-run on SIGINT + EXIT)
 cleanup() {
@@ -345,9 +342,9 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-# Launch both UIs
+# Launch both UIs — pass PYTHONPATH inline (relative path avoids colon issues).
 info "Starting Streamlit Chat UI (PID tracking)..."
-$PYTHON -m streamlit run src/copilot/serving/ui/chat_app.py \
+PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/chat_app.py \
     --server.port "$STREAMLIT_PORT" \
     --server.headless true \
     --browser.gatherUsageStats false \
@@ -359,7 +356,7 @@ sleep 3
 
 # Launch Dashboard in background
 info "Starting Dashboard (optional)..."
-$PYTHON -m streamlit run src/copilot/serving/ui/dashboard.py \
+PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/dashboard.py \
     --server.port "$((STREAMLIT_PORT + 1))" \
     --server.headless true \
     --browser.gatherUsageStats false \

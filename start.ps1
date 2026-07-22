@@ -345,34 +345,22 @@ $env:COPILOT_API_URL = "http://localhost:$ApiPort"
 $env:COPILOT_API_KEY = $ApiKey
 $env:PYTHONPATH = "$ScriptDir\src"
 
-Write-Info "Starting Streamlit Chat UI..."
-Write-Info "  Chat UI:     http://localhost:$StreamlitPort"
-Write-Info "  Dashboard:   http://localhost:$($StreamlitPort + 1)"
-Write-Info "  API Server:  http://localhost:$ApiPort"
-Write-Info "  API Docs:    http://localhost:$ApiPort/docs"
+Write-Info "Starting the Copilot UI..."
+Write-Info "  🌐 Copilot UI: http://localhost:$StreamlitPort"
+Write-Info "  📡 API Server: http://localhost:$ApiPort"
+Write-Info "  📖 API Docs:   http://localhost:$ApiPort/docs"
 Write-Host ""
 
-# Launch Chat UI
-$chatProcess = Start-Process -FilePath $VENV_PYTHON -ArgumentList @(
-    "-m", "streamlit", "run", "src/copilot/serving/ui/chat_app.py",
+# Launch unified app — Chat, Upload KB, and Dashboard all in one page
+$appProcess = Start-Process -FilePath $VENV_PYTHON -ArgumentList @(
+    "-m", "streamlit", "run", "src/copilot/serving/ui/app.py",
     "--server.port", $StreamlitPort,
     "--server.headless", "true",
     "--browser.gatherUsageStats", "false"
 ) -NoNewWindow -PassThru
 
-$CHAT_PID = $chatProcess.Id
-Start-Sleep -Seconds 3
-
-# Launch Dashboard
-$dashProcess = Start-Process -FilePath $VENV_PYTHON -ArgumentList @(
-    "-m", "streamlit", "run", "src/copilot/serving/ui/dashboard.py",
-    "--server.port", ($StreamlitPort + 1),
-    "--server.headless", "true",
-    "--browser.gatherUsageStats", "false"
-) -NoNewWindow -PassThru
-
-$DASH_PID = $dashProcess.Id
-Start-Sleep -Seconds 2
+$APP_PID = $appProcess.Id
+Start-Sleep -Seconds 4
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  All done — show summary
@@ -383,14 +371,14 @@ Write-Host "╔═════════════════════�
 Write-Host "║                                                              ║" -ForegroundColor Green
 Write-Host "║   🚀  Copilot is running!                                    ║" -ForegroundColor Green
 Write-Host "║                                                              ║" -ForegroundColor Green
-Write-Host "║   💬 Chat UI:        http://localhost:$StreamlitPort              ║" -ForegroundColor Green
-Write-Host "║   📊 Dashboard:     http://localhost:$($StreamlitPort + 1)              ║" -ForegroundColor Green
-Write-Host "║   📡 API Server:    http://localhost:$ApiPort                ║" -ForegroundColor Green
-Write-Host "║   📖 API Docs:      http://localhost:$ApiPort/docs           ║" -ForegroundColor Green
+Write-Host "║   🌐 Copilot UI:     http://localhost:$StreamlitPort              ║" -ForegroundColor Green
+Write-Host "║   📡 API Server:     http://localhost:$ApiPort                ║" -ForegroundColor Green
+Write-Host "║   📖 API Docs:       http://localhost:$ApiPort/docs           ║" -ForegroundColor Green
 Write-Host "║                                                              ║" -ForegroundColor Green
 Write-Host "║   🔑 API Key:       $ApiKey                    ║" -ForegroundColor Green
 Write-Host "║                                                              ║" -ForegroundColor Green
-Write-Host "║   📤 Upload your own documents in the Chat UI sidebar         ║" -ForegroundColor Green
+Write-Host "║   💬 Chat | 📤 Upload KB | 📊 Dashboard — all in one page     ║" -ForegroundColor Green
+Write-Host "║   Use the sidebar to switch between features.                 ║" -ForegroundColor Green
 Write-Host "║                                                              ║" -ForegroundColor Green
 Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
@@ -407,7 +395,7 @@ try {
     # Cleanup on exit
     Write-Host ""
     Write-Warn "Shutting down..."
-    $pids = @($API_PID, $CHAT_PID, $DASH_PID) | Where-Object { $_ -gt 0 }
+    $pids = @($API_PID, $APP_PID) | Where-Object { $_ -gt 0 }
     foreach ($pid in $pids) {
         try {
             Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue

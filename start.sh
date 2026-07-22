@@ -308,25 +308,23 @@ if ! $API_READY; then
     err "API server failed to start within 30 seconds."
     err "Check if port $API_PORT is available or run manually:"
     err "  COPILOT_API_KEY=$API_KEY PYTHONPATH=src $PYTHON -m uvicorn copilot.serving.api:app --host 0.0.0.0 --port $API_PORT"
-    info "Continuing anyway — you can start the chat UI manually with:"
-    info "  COPILOT_API_KEY=$API_KEY COPILOT_API_URL=http://localhost:$API_PORT PYTHONPATH=src $PYTHON -m streamlit run src/copilot/serving/ui/chat_app.py"
+info "Continuing anyway — you can start the UI manually with:"
+info "  COPILOT_API_KEY=$API_KEY COPILOT_API_URL=http://localhost:$API_PORT PYTHONPATH=src $PYTHON -m streamlit run src/copilot/serving/ui/app.py --server.port $STREAMLIT_PORT"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Step 6: Launch the Streamlit UI
 # ─────────────────────────────────────────────────────────────────────────────
 
-step "Step 6/6 — Launching Chat UI"
+step "Step 6/6 — Starting the Copilot UI"
 
 export COPILOT_API_URL="http://localhost:$API_PORT"
 export COPILOT_API_KEY="$API_KEY"
 
-info "Starting all Streamlit UIs..."
-info "  💬 Chat:      http://localhost:$STREAMLIT_PORT"
-info "  📤 Upload KB: http://localhost:$((STREAMLIT_PORT + 2))"
-info "  📊 Dashboard: http://localhost:$((STREAMLIT_PORT + 1))"
-info "  📡 API:       http://localhost:$API_PORT"
-info "  📖 API Docs:  http://localhost:$API_PORT/docs"
+info "Starting the Copilot UI..."
+info "  🌐 App:        http://localhost:$STREAMLIT_PORT"
+info "  📡 API:        http://localhost:$API_PORT"
+info "  📖 API Docs:   http://localhost:$API_PORT/docs"
 echo ""
 
 # Function to cleanup on exit (guard prevents double-run on SIGINT + EXIT)
@@ -347,39 +345,17 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-# Launch all UIs — pass PYTHONPATH inline (relative path avoids colon issues).
-info "Starting Streamlit Chat UI (PID tracking)..."
-PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/chat_app.py \
+# Launch unified app — Chat, Upload KB, and Dashboard all in one page
+info "Starting Copilot UI (PID tracking)..."
+PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/app.py \
     --server.port "$STREAMLIT_PORT" \
     --server.headless true \
     --browser.gatherUsageStats false \
     2>&1 &
-CHAT_PID=$!
-_ALL_PIDS+=("$CHAT_PID")
+APP_PID=$!
+_ALL_PIDS+=("$APP_PID")
 
-sleep 3
-
-info "Starting Upload KB page..."
-PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/upload.py \
-    --server.port "$((STREAMLIT_PORT + 2))" \
-    --server.headless true \
-    --browser.gatherUsageStats false \
-    2>&1 &
-UPLOAD_PID=$!
-_ALL_PIDS+=("$UPLOAD_PID")
-
-sleep 2
-
-info "Starting Dashboard..."
-PYTHONPATH="src" $PYTHON -m streamlit run src/copilot/serving/ui/dashboard.py \
-    --server.port "$((STREAMLIT_PORT + 1))" \
-    --server.headless true \
-    --browser.gatherUsageStats false \
-    2>&1 &
-DASH_PID=$!
-_ALL_PIDS+=("$DASH_PID")
-
-sleep 2
+sleep 4
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  All done — show summary
@@ -390,15 +366,14 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║                                                              ║${NC}"
 echo -e "${GREEN}║   🚀  Copilot is running!                                    ║${NC}"
 echo -e "${GREEN}║                                                              ║${NC}"
-echo -e "${GREEN}║   💬 Chat:          http://localhost:${STREAMLIT_PORT}              ║${NC}"
-echo -e "${GREEN}║   📤 Upload KB:     http://localhost:$((STREAMLIT_PORT + 2))              ║${NC}"
-echo -e "${GREEN}║   📊 Dashboard:     http://localhost:$((STREAMLIT_PORT + 1))              ║${NC}"
-echo -e "${GREEN}║   📡 API:           http://localhost:${API_PORT}                ║${NC}"
-echo -e "${GREEN}║   📖 API Docs:      http://localhost:${API_PORT}/docs           ║${NC}"
+echo -e "${GREEN}║   🌐 Copilot UI:     http://localhost:${STREAMLIT_PORT}              ║${NC}"
+echo -e "${GREEN}║   📡 API Server:     http://localhost:${API_PORT}                ║${NC}"
+echo -e "${GREEN}║   📖 API Docs:       http://localhost:${API_PORT}/docs           ║${NC}"
 echo -e "${GREEN}║                                                              ║${NC}"
 echo -e "${GREEN}║   🔑 API Key:       ${API_KEY}                    ║${NC}"
 echo -e "${GREEN}║                                                              ║${NC}"
-echo -e "${GREEN}║   📤 Upload your own documents in the Chat UI sidebar         ║${NC}"
+echo -e "${GREEN}║   💬 Chat | 📤 Upload KB | 📊 Dashboard — all in one page     ║${NC}"
+echo -e "${GREEN}║   Use the sidebar to switch between features.                 ║${NC}"
 echo -e "${GREEN}║                                                              ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""

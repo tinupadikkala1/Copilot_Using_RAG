@@ -161,15 +161,21 @@ class IntentClassifier:
         """Return the embedding vector from the most recent predict() call."""
         return self._last_query_vector
 
-    def predict(self, query: str) -> tuple[str, float]:
+    def predict(self, query: str, *, llm_fallback=None) -> tuple[str, float]:
         """Return ``(intent_label, confidence)`` with confidence in [0, 1].
+
+        Two-stage classification:
+        1. Fast centroid classifier (always runs).
+        2. If confidence is below threshold AND an LLM client is provided
+           via ``llm_fallback``, ask the LLM to classify as a second pass.
 
         Args:
             query: The user's input text.
+            llm_fallback: Optional LLM client for second-pass classification.
 
         Returns:
             Tuple of (label, confidence). Label is ``"unknown"`` when
-            confidence is below the threshold.
+            confidence is below the threshold after both stages.
         """
         vec = self._embedder.encode([query])[0]
         self._last_query_vector = vec.tolist() if vec is not None else None
@@ -177,11 +183,51 @@ class IntentClassifier:
         idx = int(np.argmax(sims))
         # Map cosine [-1, 1] -> confidence [0, 1].
         confidence = float((sims[idx] + 1.0) / 2.0)
-        if confidence < self._min_confidence:
-            logger.debug(
-                "Low-confidence intent (%.3f < %.3f); returning 'unknown'",
-                confidence,
-                self._min_confidence,
-            )
-            return "unknown", confidence
-        return self._labels[idx], confidence
+
+        if confidence >= self._min_confidence:
+            return self._labels[idx], confidence
+
+        # Stage 2: LLM fallback for low-confidence queries.
+        if llm_fallback is not None and confidence < self._min_confidence:
+            try:
+                llm_result = self._llm_classify(query, llm_fallback)
+                if llm_result is not None:
+                    llm_label, llm_conf = llm_result
+                    if llm_conf > confidence:
+                        logger.debug(
+                            "LLM fallback improved intent: centroid=%.3f(%s) -> llm=%.3f(%s)",
+                            confidence, self._labels[idx] if idx < len(self._labels) else "?",
+                            llm_conf, llm_label,
+                        )
+                        self._last_query_vector = None  # Invalidate since we used LLM
+                        return llm_label, llm_conf
+            except Exception:
+                logger.exception("LLM intent fallback failed, using centroid result")
+
+        logger.debug(
+            "Low-confidence intent (%.3f < %.3f); returning 'unknown'",
+            confidence,
+            self._min_confidence,
+        )
+        return "unknown", confidence
+
+    @staticmethod
+    def _llm_classify(query: str, llm) -> tuple[str, float] | None:
+        """Ask an LLM to classify the query into one of the known intents."""
+        labels = ", ".join(INTENT_EXAMPLES.keys())
+        prompt = (
+            f"Classify the following customer query into exactly one of these intents: {labels}.\n"
+            f"Reply with ONLY the intent label (one word), nothing else.\n"
+            f"Query: {query}\n"
+            f"Intent:"
+        )
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            response = llm.generate(messages, temperature=0.0)
+            response = response.strip().lower()
+            for label in INTENT_EXAMPLES:
+                if label in response:
+                    return label, 0.85  # Higher confidence for LLM-verified
+        except Exception:
+            pass
+        return None

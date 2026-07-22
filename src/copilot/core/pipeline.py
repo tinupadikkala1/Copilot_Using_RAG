@@ -11,9 +11,9 @@ from copilot.analytics.db import init_db
 from copilot.core.cache import ResponseCache
 from copilot.core.escalation import should_escalate
 from copilot.core.generation import LLMClient
-from copilot.core.guards import groundedness_score, sanitize
+from copilot.core.guards import REFUSAL, groundedness_score, sanitize
 from copilot.core.intent import IntentClassifier
-from copilot.core.prompt import build_rag_prompt
+from copilot.core.prompt import build_force_prompt, build_rag_prompt
 from copilot.core.retriever import Retriever
 from copilot.core.router import Route, route
 from copilot.schemas import ChatResponse, Citation
@@ -39,6 +39,22 @@ _LOW_CONFIDENCE_ANSWER = (
 
 # Response cache for identical queries.
 _response_cache = ResponseCache(maxsize=128, ttl_s=300.0)
+
+
+def _is_refusal(text: str) -> bool:
+    """Check if the LLM's output is a refusal to answer."""
+    stripped = text.strip()
+    # Check for the exact refusal phrase
+    if stripped == REFUSAL:
+        return True
+    # Also check for common refusal variations
+    if stripped.startswith("I don't have enough information"):
+        return True
+    if stripped.startswith("I don't know"):
+        return True
+    if stripped.startswith("I cannot answer"):
+        return True
+    return False
 
 
 class SupportPipeline:
@@ -67,6 +83,45 @@ class SupportPipeline:
         self._k = k
         self._min_groundedness = min_groundedness
         init_db()
+
+    def _generate_with_retry(
+        self,
+        query: str,
+        contexts: list,
+        use_cot: bool = True,
+    ) -> str:
+        """Generate an answer, retrying with a force prompt if the LLM refuses.
+
+        Many local LLMs are fine-tuned to be overly cautious and will say
+        "I don't have enough information..." even when relevant context
+        is provided. This method:
+
+        1. Tries the standard RAG prompt first.
+        2. If the LLM outputs a refusal, retries ONCE with the force-answer
+           prompt that explicitly commands the LLM to answer.
+        3. Logs whether a retry was needed.
+        """
+        # First attempt: standard RAG prompt
+        messages = build_rag_prompt(query, contexts, use_cot=use_cot)
+        answer = self._llm.generate(messages) or ""
+
+        if not _is_refusal(answer):
+            return answer
+
+        # Second attempt: force-answer prompt (stronger directive)
+        logger.info("LLM refused with standard prompt, retrying with force prompt")
+        force_messages = build_force_prompt(query, contexts)
+        force_answer = self._llm.generate(force_messages) or ""
+
+        if not _is_refusal(force_answer):
+            logger.info("Force prompt succeeded")
+            return force_answer
+
+        # Both attempts failed — return the better of the two
+        logger.warning("Both standard and force prompts failed — LLM still refusing")
+        # The force answer might at least contain some useful text even if
+        # it starts with a refusal preamble. Return whichever is longer.
+        return answer if len(answer) >= len(force_answer) else force_answer
 
     def answer_query(self, query: str, session_id: str) -> ChatResponse:
         """Process a user query end-to-end and return a response.
@@ -116,13 +171,8 @@ class SupportPipeline:
                 answer = "I don't have enough information in my knowledge base to answer that."
                 citations: list[Citation] = []
             else:
-                messages = build_rag_prompt(query, contexts, use_cot=False)
-                llm_answer = self._llm.generate(messages) or ""
-                # Avoid double "I don't have enough information" when the
-                # LLM follows its instruction to output the exact refusal.
-                if llm_answer.strip().startswith(
-                    "I don't have enough information"
-                ):
+                llm_answer = self._generate_with_retry(query, contexts, use_cot=False)
+                if _is_refusal(llm_answer):
                     answer = llm_answer
                 else:
                     answer = _LOW_CONFIDENCE_ANSWER + llm_answer
@@ -138,9 +188,8 @@ class SupportPipeline:
             metrics.record_turn(resp, (time.perf_counter() - started) * 1000)
             return resp
 
-        # --- Generate grounded answer (with CoT for better accuracy) ---
-        messages = build_rag_prompt(query, contexts, use_cot=True)
-        answer = self._llm.generate(messages)
+        # --- Generate grounded answer (with retry on refusal) ---
+        answer = self._generate_with_retry(query, contexts, use_cot=True)
         grounded = groundedness_score(answer, contexts, use_synonyms=True)
 
         # --- Check escalation ---

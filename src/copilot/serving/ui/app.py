@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import httpx
@@ -80,6 +81,9 @@ def _fetch_metrics() -> dict | None:
         return None
 
 
+
+
+
 # ---------------------------------------------------------------------------
 # Sidebar navigation
 # ---------------------------------------------------------------------------
@@ -127,6 +131,8 @@ if "upload_status" not in st.session_state:
     st.session_state.upload_status = None
 if "index_result" not in st.session_state:
     st.session_state.index_result = None
+if "build_running" not in st.session_state:
+    st.session_state.build_running = False
 
 # ---------------------------------------------------------------------------
 #  Chat view
@@ -141,6 +147,10 @@ def _chat_view() -> None:
         "the copilot answers using the vector index."
     )
 
+    # Show processing indicator while another question is being answered
+    if st.session_state.get("chat_processing", False):
+        st.info("⏳ Your question is being processed... Please wait.")
+
     # Chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
@@ -154,13 +164,16 @@ def _chat_view() -> None:
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.chat_message("user").markdown(prompt)
         st.session_state.last_query = prompt
+        st.session_state.chat_processing = True
 
         try:
             data = _send_message(prompt, st.session_state.session_id)
         except httpx.HTTPError:
             st.error("Sorry, the server encountered an error. Please try again.")
+            st.session_state.chat_processing = False
             st.stop()
 
+        st.session_state.chat_processing = False
         st.session_state.session_id = data["session_id"]
         answer = data["answer"]
 
@@ -286,7 +299,7 @@ def _upload_view() -> None:
             "🚀 Build/Refresh Vector Index",
             type="primary",
             use_container_width=True,
-            disabled=not bool(existing_docs),
+            disabled=not bool(existing_docs) or st.session_state.build_running,
             help="Chunk, embed, and index all documents in data/kb_raw/",
         )
 
@@ -300,34 +313,18 @@ def _upload_view() -> None:
             st.session_state.index_result = None
             st.rerun()
 
-    # Index build status
+    # ------------------------------------------------------------------
+    # Index build — start in background + poll real-time progress
+    # ------------------------------------------------------------------
     if build_clicked and API_KEY:
-        with st.status("🧠 Building vector index...", expanded=True) as status:
-            try:
-                with httpx.Client(timeout=300) as client:
-                    resp = client.post(
-                        f"{API_URL}/upload/build",
-                        headers={"x-api-key": API_KEY},
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-
-                st.session_state.index_result = data
-                status.update(
-                    label=f"✅ Index built: {data.get('chunks_indexed', 0)} chunks from "
-                    f"{data.get('documents_loaded', 0)} documents",
-                    state="complete",
-                )
-            except httpx.HTTPError as e:
-                st.session_state.index_result = {"error": str(e)}
-                status.update(label="❌ Index build failed", state="error")
-
+        st.session_state.build_running = True
         st.rerun()
-    elif build_clicked and not API_KEY:
-        st.error("API key not configured. Set COPILOT_API_KEY environment variable.")
 
-    # Show last index results
-    if st.session_state.index_result and not build_clicked:
+    if st.session_state.build_running:
+        _render_build_progress(API_KEY)
+
+    # Show last index results (only when build is NOT running)
+    if st.session_state.index_result and not st.session_state.build_running:
         result = st.session_state.index_result
         if "error" in result:
             st.error(f"Last build failed: {result['error']}")
@@ -336,6 +333,112 @@ def _upload_view() -> None:
                 f"✅ **{result.get('chunks_indexed', 0)} chunks** indexed from "
                 f"**{result.get('documents_loaded', 0)} documents** (last build)"
             )
+
+
+def _render_build_progress(api_key: str) -> None:
+    """Poll the build progress endpoint and render a real-time progress bar."""
+    status_placeholder = st.empty()
+    progress_bar = st.progress(0.0)
+    phase_text = st.empty()
+
+    with httpx.Client(timeout=10) as client:
+        # Start the build
+        try:
+            resp = client.post(
+                f"{API_URL}/upload/build",
+                headers={"x-api-key": api_key},
+            )
+            resp.raise_for_status()
+            start_data = resp.json()
+        except httpx.HTTPError as e:
+            status_placeholder.error(f"❌ Failed to start build: {e}")
+            st.session_state.build_running = False
+            return
+
+        if start_data.get("status") == "already_running":
+            status_placeholder.warning("⚠️ A build is already running. Please wait.")
+            # Poll for the already-running build to finish
+        elif start_data.get("status") != "started":
+            if "chunks_indexed" in start_data:
+                # Build completed synchronously (no changes detected)
+                st.session_state.index_result = start_data
+                st.session_state.build_running = False
+                progress_bar.progress(1.0)
+                phase_text.success(
+                    f"✅ **{start_data.get('chunks_indexed', 0)} chunks** indexed from "
+                    f"**{start_data.get('documents_loaded', 0)} documents**"
+                )
+                st.rerun()
+                return
+            else:
+                status_placeholder.error(f"❌ Unexpected response: {start_data}")
+                st.session_state.build_running = False
+                return
+
+        # Poll progress until completion
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            try:
+                resp = client.get(
+                    f"{API_URL}/upload/build/progress",
+                    headers={"x-api-key": api_key},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                status = data.get("status", "idle")
+
+                if status in ("starting", "running"):
+                    current = data.get("current", 0)
+                    total = data.get("total", 0)
+                    phase = data.get("phase", "")
+
+                    if total > 0:
+                        pct = min(current / total, 1.0)
+                        progress_bar.progress(pct)
+                        bar_chars = int(pct * 20)
+                        visual_bar = "█" * bar_chars + "░" * (20 - bar_chars)
+                        phase_text.markdown(
+                            f"**Batch {current}/{total}** — {phase}  "
+                            f"`{visual_bar} {int(pct * 100)}%`"
+                        )
+                    else:
+                        phase_text.markdown(f"⏳ {phase}")
+
+                    status_placeholder.info("🧠 Building vector index...")
+
+                elif status == "completed":
+                    progress_bar.progress(1.0)
+                    result = data.get("result", {})
+                    st.session_state.index_result = result
+                    chunks = result.get("chunks_indexed", 0)
+                    docs = result.get("documents_loaded", 0)
+                    phase_text.success(
+                        f"✅ **{chunks} chunks** indexed from **{docs} documents**"
+                    )
+                    status_placeholder.empty()
+                    st.session_state.build_running = False
+                    st.rerun()
+                    return
+
+                elif status == "error":
+                    error_msg = data.get("error", "Unknown error")
+                    progress_bar.progress(0.0)
+                    phase_text.error(f"❌ Build failed: {error_msg}")
+                    status_placeholder.empty()
+                    st.session_state.index_result = {"error": error_msg}
+                    st.session_state.build_running = False
+                    return
+
+            except httpx.HTTPError:
+                pass
+
+            time.sleep(1.5)
+
+        # Timed out
+        progress_bar.progress(0.0)
+        phase_text.error("❌ Build timed out after 10 minutes")
+        status_placeholder.empty()
+        st.session_state.build_running = False
 
 
 # ---------------------------------------------------------------------------

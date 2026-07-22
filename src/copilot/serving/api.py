@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -20,6 +23,8 @@ from copilot.schemas import ChatResponse
 from copilot.serving.deps import get_pipeline
 from copilot.serving.security import RateLimiter, require_api_key
 
+logger = logging.getLogger(__name__)
+
 _limiter = RateLimiter()
 
 # Upload configuration (module-level for testability).
@@ -28,6 +33,27 @@ SUPPORTED_UPLOAD_EXTENSIONS: set[str] = {
 }
 KB_RAW = Path("data/kb_raw")
 MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB
+
+# ---------------------------------------------------------------------------
+# Concurrency guards
+# ---------------------------------------------------------------------------
+
+# Prevents concurrent /chat requests (local LLM cannot serve two at once).
+_chat_lock = threading.Lock()
+
+# Prevents concurrent /upload/build requests.
+_build_lock = threading.Lock()
+
+# Shared build progress — written by the background thread, read by the
+# progress-polling endpoint.
+_build_progress: dict = {
+    "status": "idle",        # idle | running | completed | error
+    "current": 0,
+    "total": 0,
+    "phase": "",
+    "result": None,
+    "error": None,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -91,13 +117,19 @@ def create_app() -> FastAPI:
 
         Requires ``X-API-Key`` header. Returns a grounded, cited answer
         or an escalation ticket if the query cannot be confidently resolved.
+
+        Only one question is processed at a time. If another request arrives
+        while one is in progress it will wait in line.
         """
         _limiter.check(request)
         session_id = req.session_id or uuid.uuid4().hex
         pipeline = get_pipeline()
-        started = time.perf_counter()
-        resp = pipeline.answer_query(req.message, session_id)
-        metrics.record_turn(resp, (time.perf_counter() - started) * 1000)
+
+        with _chat_lock:
+            started = time.perf_counter()
+            resp = pipeline.answer_query(req.message, session_id)
+            metrics.record_turn(resp, (time.perf_counter() - started) * 1000)
+
         return resp
 
     @app.post(
@@ -203,41 +235,97 @@ def create_app() -> FastAPI:
             "total_errors": len(errors),
         }
 
+    def _run_build_in_background() -> None:
+        """Run the index build in a background thread, updating _build_progress."""
+        global _build_progress
+
+        def _progress(current: int, total: int, phase: str) -> None:
+            _build_progress.update(
+                status="running", current=current, total=total, phase=phase
+            )
+            logger.debug("Build progress: %d/%d — %s", current, total, phase)
+
+        try:
+            embedder = Embedder(timeout=600.0)
+            store = ChromaStore(persist_dir="data/chroma")
+
+            from copilot.serving.deps import get_pipeline
+
+            pipeline = get_pipeline()
+            retriever = pipeline._retriever if hasattr(pipeline, "_retriever") else None
+
+            chunks_count = build_index(
+                kb_root=KB_RAW,
+                store=store,
+                embedder=embedder,
+                retriever=retriever,
+                progress_callback=_progress,
+            )
+            docs_count = len(list(KB_RAW.iterdir()))
+
+            _build_progress.update(
+                status="completed",
+                current=_build_progress["total"],
+                result={
+                    "status": "ok",
+                    "documents_loaded": docs_count,
+                    "chunks_indexed": chunks_count,
+                },
+            )
+        except Exception as exc:
+            logger.exception("Background index build failed")
+            _build_progress.update(
+                status="error",
+                error=str(exc),
+                result={"status": "error", "error": str(exc)},
+            )
+        finally:
+            _build_lock.release()
+
     @app.post(
         "/upload/build",
         dependencies=[Depends(require_api_key)],
     )
     def build_kb_index() -> dict:
-        """Build/refresh the vector index from all files in data/kb_raw/.
+        """Start building/refreshing the vector index in a background thread.
 
-        Requires ``X-API-Key`` header. Returns the number of documents
-        loaded and chunks indexed. Also refreshes the BM25 index for
-        hybrid search.
+        Requires ``X-API-Key`` header. Returns immediately with a status
+        indicator. Poll ``GET /upload/build/progress`` to track progress.
+
+        If a build is already running, returns 409 Conflict.
+        If no documents exist, returns 200 with zero counts.
         """
         if not KB_RAW.exists() or not any(KB_RAW.iterdir()):
             return {"status": "ok", "documents_loaded": 0, "chunks_indexed": 0}
 
-        embedder = Embedder(timeout=600.0)
-        store = ChromaStore(persist_dir="data/chroma")
-        # Get the cached retriever (if any) so BM25 is updated after build.
-        from copilot.serving.deps import get_pipeline
+        if not _build_lock.acquire(blocking=False):
+            return {"status": "already_running"}
 
-        pipeline = get_pipeline()
-        retriever = pipeline._retriever if hasattr(pipeline, "_retriever") else None
+        # Reset progress and launch background thread.
+        _build_progress.clear()
+        _build_progress.update(status="starting", current=0, total=0, phase="Initialising…")
 
-        chunks_count = build_index(
-            kb_root=KB_RAW,
-            store=store,
-            embedder=embedder,
-            retriever=retriever,
-        )
-        docs_count = len(list(KB_RAW.iterdir()))
+        thread = threading.Thread(target=_run_build_in_background, daemon=True)
+        thread.start()
 
-        return {
-            "status": "ok",
-            "documents_loaded": docs_count,
-            "chunks_indexed": chunks_count,
-        }
+        return {"status": "started"}
+
+    @app.get(
+        "/upload/build/progress",
+        dependencies=[Depends(require_api_key)],
+    )
+    def get_build_progress() -> dict:
+        """Return current index-build progress.
+
+        Requires ``X-API-Key`` header. Returns:
+        - ``status``: "idle" | "starting" | "running" | "completed" | "error"
+        - ``current``: Batch number currently being processed (0-based).
+        - ``total``: Total number of batches (0 if unknown).
+        - ``phase``: Human-readable phase description.
+        - ``result``: Final build result (only present when status is "completed").
+        - ``error``: Error message (only present when status is "error").
+        """
+        return dict(_build_progress)
 
     return app
 

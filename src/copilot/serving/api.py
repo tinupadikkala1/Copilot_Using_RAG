@@ -293,22 +293,30 @@ def create_app() -> FastAPI:
             logger.debug("Build progress: %d/%d — %s", current, total, phase)
 
         try:
+            # Create fresh instances — don't depend on pipeline singletons
+            # (they may be stale or cleared after a hard reset).
             embedder = Embedder(timeout=600.0)
             store = ChromaStore(persist_dir="data/chroma")
-
-            from copilot.serving.deps import get_pipeline
-
-            pipeline = get_pipeline()
-            retriever = pipeline._retriever if hasattr(pipeline, "_retriever") else None
 
             chunks_count = build_index(
                 kb_root=KB_RAW,
                 store=store,
                 embedder=embedder,
-                retriever=retriever,
+                retriever=None,  # BM25 will be rebuilt when pipeline is next used
                 progress_callback=_progress,
             )
-            docs_count = len(list(KB_RAW.iterdir()))
+            docs_count = len([f for f in KB_RAW.iterdir() if f.is_file()])
+
+            # After successful build, clear pipeline singletons so they
+            # pick up the new index on the next request.
+            from copilot.serving.deps import (
+                get_vector_store,
+                get_retriever,
+                get_pipeline,
+            )
+            get_vector_store.cache_clear()
+            get_retriever.cache_clear()
+            get_pipeline.cache_clear()
 
             with _build_progress_lock:
                 _build_progress.update(
@@ -419,32 +427,7 @@ def create_app() -> FastAPI:
 
         cleared = []
 
-        # 1. Delete all uploaded files in data/kb_raw/
-        if KB_RAW.exists():
-            file_count = 0
-            for f in KB_RAW.iterdir():
-                if f.is_file():
-                    f.unlink()
-                    file_count += 1
-            cleared.append(f"Deleted {file_count} uploaded file(s)")
-
-        # 2. Delete ChromaDB index
-        chroma_dir = Path("data/chroma")
-        if chroma_dir.exists():
-            shutil.rmtree(chroma_dir)
-            chroma_dir.mkdir(parents=True, exist_ok=True)
-            cleared.append("Cleared ChromaDB vector index")
-
-        # 3. Delete metrics database
-        if DB_PATH.exists():
-            DB_PATH.unlink()
-            cleared.append("Deleted metrics database")
-
-        # 4. Re-initialize the database (creates empty tables)
-        init_db()
-        cleared.append("Re-initialized empty database")
-
-        # 5. Clear the deps singletons so they rebuild with fresh stores
+        # 1. FIRST: Clear all singletons so old DB connections are released.
         from copilot.serving.deps import (
             get_embedder,
             get_vector_store,
@@ -453,16 +436,43 @@ def create_app() -> FastAPI:
             get_llm_client,
             get_pipeline,
         )
-        # Clear all lru_cache singletons
         get_vector_store.cache_clear()
         get_retriever.cache_clear()
         get_pipeline.cache_clear()
-        cleared.append("Reset pipeline singletons")
+        cleared.append("Released pipeline singletons and DB connections")
 
-        # 6. Clear response cache
+        # 2. Clear response cache
         from copilot.core.pipeline import _response_cache
         _response_cache.clear()
         cleared.append("Cleared response cache")
+
+        # 3. Delete all uploaded files in data/kb_raw/
+        if KB_RAW.exists():
+            file_count = 0
+            for f in KB_RAW.iterdir():
+                if f.is_file():
+                    f.unlink()
+                    file_count += 1
+            cleared.append(f"Deleted {file_count} uploaded file(s)")
+
+        # 4. Delete ChromaDB index (now safe — no open connections)
+        chroma_dir = Path("data/chroma")
+        if chroma_dir.exists():
+            shutil.rmtree(chroma_dir, ignore_errors=True)
+            chroma_dir.mkdir(parents=True, exist_ok=True)
+            cleared.append("Cleared ChromaDB vector index")
+
+        # 5. Delete metrics database
+        if DB_PATH.exists():
+            try:
+                DB_PATH.unlink()
+                cleared.append("Deleted metrics database")
+            except OSError:
+                cleared.append("Metrics database locked — will be overwritten")
+
+        # 6. Re-initialize the database (creates empty tables)
+        init_db()
+        cleared.append("Re-initialized empty database")
 
         logger.info("Hard reset completed: %s", "; ".join(cleared))
 

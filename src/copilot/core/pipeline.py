@@ -9,7 +9,7 @@ import time
 from copilot.analytics import metrics
 from copilot.analytics.db import init_db
 from copilot.core.cache import ResponseCache
-from copilot.core.escalation import should_escalate
+from copilot.core.escalation import should_escalate, create_ticket
 from copilot.core.generation import LLMClient
 from copilot.core.guards import REFUSAL, groundedness_score, sanitize
 from copilot.core.intent import IntentClassifier
@@ -142,8 +142,8 @@ class SupportPipeline:
         cached = _response_cache.get(cache_key)
         if cached is not None:
             logger.debug("Returning cached response for key=%s", cache_key[:40])
-            cached_resp = ChatResponse(**cached)
-            cached_resp.session_id = session_id
+            cached_data = {**cached, "session_id": session_id}
+            cached_resp = ChatResponse(**cached_data)
             return cached_resp
 
         # --- Intent classification (two-stage: centroid + optional LLM fallback) ---
@@ -205,15 +205,26 @@ class SupportPipeline:
         citations = self._extract_citations(answer, contexts)
 
         if decision.escalate:
-            # No human queue exists — give the best answer we have instead.
-            resp = ChatResponse(
-                answer=answer,
-                citations=citations,
-                intent=intent,
-                escalated=False,
-                confidence=min(intent_conf, grounded, 0.5),
-                session_id=session_id,
-            )
+            if intent == 'human_agent':
+                ticket_id = create_ticket(session_id, query, decision.reason)
+                resp = ChatResponse(
+                    answer=f"Your query has been escalated to a human agent. A support specialist will follow up on ticket {ticket_id}. In the meantime, here's what I found:\n\n{answer}",
+                    citations=citations,
+                    intent=intent,
+                    escalated=True,
+                    confidence=min(intent_conf, grounded, 0.5),
+                    session_id=session_id,
+                )
+            else:
+                # Still provide the best answer for non-human-agent escalations
+                resp = ChatResponse(
+                    answer=answer,
+                    citations=citations,
+                    intent=intent,
+                    escalated=False,
+                    confidence=min(intent_conf, grounded, 0.5),
+                    session_id=session_id,
+                )
         else:
             resp = ChatResponse(
                 answer=answer,

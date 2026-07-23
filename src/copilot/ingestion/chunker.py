@@ -51,7 +51,7 @@ def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         overlapped: list[str] = [chunks[0]]
         for prev, cur in zip(chunks, chunks[1:]):
             tail = prev[-overlap:]
-            overlapped.append(f"{tail}{cur}")
+            overlapped.append(f"{tail} {cur}")
         chunks = overlapped
     return chunks
 

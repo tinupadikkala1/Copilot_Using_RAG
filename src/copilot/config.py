@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +54,7 @@ class Settings(BaseSettings):
     )
 
 
+@functools.lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return a singleton Settings instance."""
+    """Return a cached singleton Settings instance."""
     return Settings()

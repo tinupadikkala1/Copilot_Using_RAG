@@ -15,11 +15,12 @@ class TestSplitText:
         """Chunks respect the size boundary; overlap is present between consecutive chunks."""
         text = "word " * 500  # ~2500 chars
         chunks = _split_text(text, chunk_size=200, overlap=30)
-        # After overlap is applied, chunks may be up to chunk_size + overlap.
-        max_allowed = 200 + 30
+        # After overlap is applied, chunks may be up to chunk_size + overlap + 1
+        # (the +1 accounts for the space separator between overlap tail and chunk).
+        max_allowed = 200 + 30 + 1
         assert all(
             len(c) <= max_allowed for c in chunks
-        ), f"All chunks must be ≤ chunk_size + overlap ({max_allowed})"
+        ), f"All chunks must be ≤ chunk_size + overlap + 1 ({max_allowed})"
         if len(chunks) > 1:
             # The second chunk should contain the tail of the first (overlap).
             tail = chunks[0][-30:]

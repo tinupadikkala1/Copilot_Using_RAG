@@ -126,9 +126,7 @@ def create_app() -> FastAPI:
         pipeline = get_pipeline()
 
         with _chat_lock:
-            started = time.perf_counter()
             resp = pipeline.answer_query(req.message, session_id)
-            metrics.record_turn(resp, (time.perf_counter() - started) * 1000)
 
         return resp
 

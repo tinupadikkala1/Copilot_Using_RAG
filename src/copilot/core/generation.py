@@ -16,8 +16,8 @@ from copilot.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Retry configuration for low-end hardware where model loading may be slow.
-_MAX_RETRIES = 2
-_RETRY_DELAY_S = 3.0
+_MAX_RETRIES = 3
+_RETRY_DELAY_S = 5.0
 
 
 class LLMClient:
@@ -29,14 +29,14 @@ class LLMClient:
     Args:
         model: The Ollama model to use for generation.
         base_url: Ollama server base URL.
-        timeout: Request timeout in seconds (default 300s for slow hardware).
+        timeout: Request timeout in seconds (default 600s for slow hardware).
     """
 
     def __init__(
         self,
         model: str | None = None,
         base_url: str | None = None,
-        timeout: float = 300.0,
+        timeout: float = 600.0,
     ) -> None:
         settings = get_settings()
         self._model = model or settings.llm_model

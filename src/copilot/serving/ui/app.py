@@ -42,7 +42,7 @@ st.set_page_config(
 
 def _send_message(message: str, session_id: str | None) -> dict:
     """Send a chat message to the backend and return the JSON response."""
-    with httpx.Client(timeout=300) as client:
+    with httpx.Client(timeout=600) as client:
         resp = client.post(
             f"{API_URL}/chat",
             headers={"x-api-key": API_KEY},
@@ -250,8 +250,23 @@ def _chat_view() -> None:
 
         try:
             data = _send_message(prompt, st.session_state.session_id)
-        except httpx.HTTPError:
-            st.error("Sorry, the server encountered an error. Please try again.")
+        except httpx.TimeoutException:
+            st.error(
+                "⏱️ The request timed out. The AI model may still be loading into memory. "
+                "Please wait 30 seconds and try again — subsequent queries will be faster."
+            )
+            st.session_state.chat_processing = False
+            st.stop()
+        except httpx.ConnectError:
+            st.error(
+                "🔌 Cannot connect to the API server. Make sure it's running on port 8000."
+            )
+            st.session_state.chat_processing = False
+            st.stop()
+        except httpx.HTTPError as e:
+            st.error(
+                f"❌ Server error: {e}. Please try again."
+            )
             st.session_state.chat_processing = False
             st.stop()
 

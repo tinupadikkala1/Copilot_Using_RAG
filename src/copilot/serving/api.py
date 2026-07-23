@@ -140,8 +140,36 @@ def create_app() -> FastAPI:
         session_id = req.session_id or uuid.uuid4().hex
         pipeline = get_pipeline()
 
-        with _chat_lock:
-            resp = pipeline.answer_query(req.message, session_id)
+        try:
+            with _chat_lock:
+                resp = pipeline.answer_query(req.message, session_id)
+        except RuntimeError as exc:
+            # LLM or embedding call failed (timeout, connection error, etc.)
+            logger.error("Pipeline failed for query: %s", exc)
+            # Return a graceful response instead of 500
+            resp = ChatResponse(
+                answer=(
+                    "I'm sorry, the AI model is taking longer than expected to respond. "
+                    "This can happen on first use when the model is loading into memory. "
+                    "Please try again in a moment."
+                ),
+                intent="unknown",
+                escalated=False,
+                confidence=0.0,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            logger.exception("Unexpected error in pipeline")
+            resp = ChatResponse(
+                answer=(
+                    "An unexpected error occurred while processing your question. "
+                    "Please try again."
+                ),
+                intent="unknown",
+                escalated=False,
+                confidence=0.0,
+                session_id=session_id,
+            )
 
         return resp
 

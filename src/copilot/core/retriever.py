@@ -123,7 +123,60 @@ class Retriever:
                 dense_results = dense_results[:k]
 
         logger.debug("Retrieved %d chunks for query (hybrid=%s)", len(dense_results), self._bm25 is not None)
+        # Ensure results include chunks from multiple source documents.
+        dense_results = self._diversify_results(dense_results, k)
         return dense_results
+
+    @staticmethod
+    def _diversify_results(results: list[RetrievedChunk], k: int) -> list[RetrievedChunk]:
+        """Ensure results include chunks from multiple source documents.
+
+        Uses a round-robin approach: take the best chunk from each document
+        first, then fill remaining slots with the next-best from any document.
+        This prevents all results being from a single file.
+        """
+        if len(results) <= 1:
+            return results
+
+        # Group by source document.
+        from collections import OrderedDict
+
+        by_doc: OrderedDict[str, list[RetrievedChunk]] = OrderedDict()
+        for rc in results:
+            doc_id = rc.chunk.doc_id
+            if doc_id not in by_doc:
+                by_doc[doc_id] = []
+            by_doc[doc_id].append(rc)
+
+        # If all from one doc, just return as-is (nothing to diversify).
+        if len(by_doc) <= 1:
+            return results[:k]
+
+        # Round-robin: take best from each doc first.
+        diversified: list[RetrievedChunk] = []
+        doc_indices: dict[str, int] = {doc: 0 for doc in by_doc}
+
+        # First pass: one from each document (by score order).
+        for doc_id, chunks in by_doc.items():
+            if len(diversified) < k:
+                diversified.append(chunks[0])
+                doc_indices[doc_id] = 1
+
+        # Second pass: fill remaining slots with next-best chunks.
+        while len(diversified) < k:
+            added = False
+            for doc_id, chunks in by_doc.items():
+                idx = doc_indices[doc_id]
+                if idx < len(chunks) and len(diversified) < k:
+                    diversified.append(chunks[idx])
+                    doc_indices[doc_id] = idx + 1
+                    added = True
+            if not added:
+                break
+
+        # Sort final results by score (best first).
+        diversified.sort(key=lambda x: -x.score)
+        return diversified[:k]
 
     @property
     def embedder(self) -> Embedder:

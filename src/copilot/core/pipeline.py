@@ -26,7 +26,7 @@ GREETING_REPLY = "Hi! I'm your support assistant. What can I help you with today
 
 # Minimum retrieval score to proceed with LLM generation.
 # Set very low so the LLM always gets a chance to answer.
-_MIN_RETRIEVAL_FOR_LLM = 0.05
+_MIN_RETRIEVAL_FOR_LLM = 0.01
 
 # Fallback answer when retrieval is too weak — still tries LLM but
 # acknowledges uncertainty. No ticket is created since there's no
@@ -37,23 +37,36 @@ _LOW_CONFIDENCE_ANSWER = (
     "what I found:\n\n"
 )
 
+# Regex to strip sentences that redirect users to customer support.
+_CONTACT_SUPPORT_RE = re.compile(
+    r'[^.!?]*(?:contact|reach out to|get in touch with)'
+    r'\s+(?:our|the|a)?\s*(?:customer|support|service|help|care|team|agent|representative)'
+    r'[^.!?]*[.!?]?\s*',
+    re.IGNORECASE,
+)
+
 # Response cache for identical queries.
 _response_cache = ResponseCache(maxsize=128, ttl_s=300.0)
 
 
 def _is_refusal(text: str) -> bool:
-    """Check if the LLM's output is a refusal to answer."""
-    stripped = text.strip()
-    # Check for the exact refusal phrase
-    if stripped == REFUSAL:
-        return True
-    # Also check for common refusal variations
-    if stripped.startswith("I don't have enough information"):
-        return True
-    if stripped.startswith("I don't know"):
-        return True
-    if stripped.startswith("I cannot answer"):
-        return True
+    """Check if the LLM's output is a refusal to answer or unhelpful redirect."""
+    stripped = text.strip().lower()
+    refusal_phrases = [
+        "i don't have enough information",
+        "i don't know",
+        "i cannot answer",
+        "i'm unable to",
+        "contact customer support",
+        "contact our support team",
+        "reach out to our support",
+        "contact a customer service",
+        "please contact",
+        "get in touch with our team",
+    ]
+    for phrase in refusal_phrases:
+        if phrase in stripped:
+            return True
     return False
 
 
@@ -123,6 +136,13 @@ class SupportPipeline:
         # it starts with a refusal preamble. Return whichever is longer.
         return answer if len(answer) >= len(force_answer) else force_answer
 
+    @staticmethod
+    def _clean_answer(answer: str) -> str:
+        """Remove sentences that redirect users to customer support."""
+        cleaned = _CONTACT_SUPPORT_RE.sub('', answer).strip()
+        # If we removed everything, return original (don't return empty).
+        return cleaned if cleaned else answer
+
     def answer_query(self, query: str, session_id: str) -> ChatResponse:
         """Process a user query end-to-end and return a response.
 
@@ -167,24 +187,21 @@ class SupportPipeline:
         contexts = self._retrieve_with_hyde(query, intent, intent_conf)
         retrieval_top = Retriever.top_score(contexts)
 
-        # --- Low-retrieval path: still try the LLM, but with a caveat ---
+        # --- Low-retrieval path: still generate answer from whatever context we have ---
         if retrieval_top < _MIN_RETRIEVAL_FOR_LLM:
             if not contexts:
-                answer = "I don't have enough information in my knowledge base to answer that."
+                answer = "I don't have enough information in my knowledge base to answer that. Please upload relevant documents first."
                 citations: list[Citation] = []
             else:
-                llm_answer = self._generate_with_retry(query, contexts, use_cot=False)
-                if _is_refusal(llm_answer):
-                    answer = llm_answer
-                else:
-                    answer = _LOW_CONFIDENCE_ANSWER + llm_answer
+                answer = self._generate_with_retry(query, contexts, use_cot=False)
+                answer = self._clean_answer(answer)
                 citations = self._extract_citations(answer, contexts)
             resp = ChatResponse(
                 answer=answer,
                 intent=intent,
                 citations=citations,
                 escalated=False,
-                confidence=min(retrieval_top * 2, 0.5),
+                confidence=max(retrieval_top, 0.3),
                 session_id=session_id,
             )
             metrics.record_turn(resp, (time.perf_counter() - started) * 1000)
@@ -192,6 +209,7 @@ class SupportPipeline:
 
         # --- Generate grounded answer (with retry on refusal) ---
         answer = self._generate_with_retry(query, contexts, use_cot=True)
+        answer = self._clean_answer(answer)
         grounded = groundedness_score(answer, contexts, use_synonyms=True)
 
         # --- Check escalation ---

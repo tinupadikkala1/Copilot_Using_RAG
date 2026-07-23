@@ -42,7 +42,7 @@ st.set_page_config(
 
 def _send_message(message: str, session_id: str | None) -> dict:
     """Send a chat message to the backend and return the JSON response."""
-    with httpx.Client(timeout=120) as client:
+    with httpx.Client(timeout=300) as client:
         resp = client.post(
             f"{API_URL}/chat",
             headers={"x-api-key": API_KEY},
@@ -376,7 +376,7 @@ def _render_build_progress(api_key: str) -> None:
                 return
 
         # Poll progress until completion
-        deadline = time.time() + 600
+        deadline = time.time() + 900
         while time.time() < deadline:
             try:
                 resp = client.get(
@@ -436,7 +436,7 @@ def _render_build_progress(api_key: str) -> None:
 
         # Timed out
         progress_bar.progress(0.0)
-        phase_text.error("❌ Build timed out after 10 minutes")
+        phase_text.error("❌ Build timed out after 15 minutes")
         status_placeholder.empty()
         st.session_state.build_running = False
 

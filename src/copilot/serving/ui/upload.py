@@ -198,7 +198,7 @@ with col_b:
 if build_clicked and API_KEY:
     with st.status("🧠 Building vector index...", expanded=True) as status:
         try:
-            with httpx.Client(timeout=300) as client:
+            with httpx.Client(timeout=600) as client:
                 resp = client.post(
                     f"{API_URL}/upload/build",
                     headers={"x-api-key": API_KEY},

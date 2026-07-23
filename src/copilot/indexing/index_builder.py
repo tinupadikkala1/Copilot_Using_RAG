@@ -62,7 +62,7 @@ def build_index(
     embedder: Embedder,
     chunk_size: int = 800,
     overlap: int = 150,
-    batch_size: int = 128,
+    batch_size: int = 32,
     *,
     retriever=None,
     progress_callback: Callable[[int, int, str], None] | None = None,

@@ -7,6 +7,7 @@ Replaces sentence-transformers from the original plan. Calls the Ollama
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -17,6 +18,10 @@ from copilot.config import get_settings
 logger = logging.getLogger(__name__)
 
 EMBED_DIM = 768  # nomic-embed-text produces 768-dim vectors
+
+# Retry configuration for low-end hardware where Ollama may be slow to respond.
+_MAX_RETRIES = 3
+_RETRY_DELAY_S = 2.0
 
 
 class Embedder:
@@ -48,6 +53,9 @@ class Embedder:
     def encode(self, texts: list[str]) -> np.ndarray:
         """Return L2-normalized float32 embeddings of shape (n, 768).
 
+        Includes retry logic for reliability on low-end hardware where
+        Ollama may occasionally timeout or be busy loading models.
+
         Args:
             texts: List of text strings to embed.
 
@@ -55,7 +63,7 @@ class Embedder:
             Float32 numpy array of shape (len(texts), 768).
 
         Raises:
-            RuntimeError: If the Ollama API call fails.
+            RuntimeError: If the Ollama API call fails after all retries.
         """
         if not texts:
             return np.empty((0, EMBED_DIM), dtype=np.float32)
@@ -65,13 +73,27 @@ class Embedder:
             "input": texts,
         }
 
-        try:
-            resp = self._client.post(f"{self._base_url}/api/embed", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPError as exc:
-            logger.exception("Ollama embed API call failed")
-            raise RuntimeError(f"Embedding failed for model {self._model}: {exc}") from exc
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                resp = self._client.post(f"{self._base_url}/api/embed", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                break
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_DELAY_S * (attempt + 1)
+                    logger.warning(
+                        "Embed API call failed (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1, _MAX_RETRIES, delay, exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.exception("Ollama embed API call failed after %d retries", _MAX_RETRIES)
+                    raise RuntimeError(
+                        f"Embedding failed for model {self._model} after {_MAX_RETRIES} retries: {exc}"
+                    ) from exc
 
         embeddings = data.get("embeddings")
         if not embeddings or not isinstance(embeddings, list):

@@ -7,6 +7,7 @@ instead of any paid or remote API.
 from __future__ import annotations
 
 import logging
+import time
 
 import httpx
 
@@ -14,21 +15,28 @@ from copilot.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+# Retry configuration for low-end hardware where model loading may be slow.
+_MAX_RETRIES = 2
+_RETRY_DELAY_S = 3.0
+
 
 class LLMClient:
     """Thin client for Ollama's chat endpoint.
 
+    Includes retry logic for reliability on low-end hardware where
+    the LLM may be slow to respond or timeout during model loading.
+
     Args:
         model: The Ollama model to use for generation.
         base_url: Ollama server base URL.
-        timeout: Request timeout in seconds.
+        timeout: Request timeout in seconds (default 300s for slow hardware).
     """
 
     def __init__(
         self,
         model: str | None = None,
         base_url: str | None = None,
-        timeout: float = 120.0,
+        timeout: float = 300.0,
     ) -> None:
         settings = get_settings()
         self._model = model or settings.llm_model
@@ -36,9 +44,10 @@ class LLMClient:
         self._timeout = timeout
         self._client = httpx.Client(timeout=self._timeout)
         logger.info(
-            "LLMClient initialised: model=%s url=%s",
+            "LLMClient initialised: model=%s url=%s timeout=%.0fs",
             self._model,
             self._base_url,
+            self._timeout,
         )
 
     def close(self) -> None:
@@ -56,7 +65,7 @@ class LLMClient:
         messages: list[dict[str, str]],
         temperature: float = 0.1,
     ) -> str:
-        """Send a chat completion request to Ollama.
+        """Send a chat completion request to Ollama with retry on failure.
 
         Args:
             messages: List of ``{"role": ..., "content": ...}`` dicts.
@@ -66,7 +75,7 @@ class LLMClient:
             The assistant's response text.
 
         Raises:
-            RuntimeError: If the Ollama API call fails.
+            RuntimeError: If the Ollama API call fails after all retries.
         """
         payload = {
             "model": self._model,
@@ -75,13 +84,26 @@ class LLMClient:
             "options": {"temperature": temperature},
         }
 
-        try:
-            resp = self._client.post(f"{self._base_url}/api/chat", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPError as exc:
-            logger.exception("Ollama chat API call failed")
-            raise RuntimeError(f"LLM generation failed for model {self._model}: {exc}") from exc
+        for attempt in range(_MAX_RETRIES):
+            try:
+                resp = self._client.post(f"{self._base_url}/api/chat", json=payload)
+                resp.raise_for_status()
+                data = resp.json()
+                content = data.get("message", {}).get("content", "")
+                return content.strip()
+            except httpx.HTTPError as exc:
+                if attempt < _MAX_RETRIES - 1:
+                    delay = _RETRY_DELAY_S * (attempt + 1)
+                    logger.warning(
+                        "LLM API call failed (attempt %d/%d), retrying in %.1fs: %s",
+                        attempt + 1, _MAX_RETRIES, delay, exc,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.exception("Ollama chat API call failed after %d retries", _MAX_RETRIES)
+                    raise RuntimeError(
+                        f"LLM generation failed for model {self._model} after {_MAX_RETRIES} retries: {exc}"
+                    ) from exc
 
-        content = data.get("message", {}).get("content", "")
-        return content.strip()
+        # Should never reach here, but satisfy type checker.
+        return ""

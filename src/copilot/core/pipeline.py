@@ -250,61 +250,47 @@ class SupportPipeline:
 
     # --- HyDE: Hypothetical Document Embeddings for better retrieval ---
 
-    def _retrieve_with_hyde(
-        self,
-        query: str,
-        intent: str,
-        intent_conf: float,
-    ) -> list:
-        """Retrieve context, optionally using HyDE (Hypothetical Document
-        Embeddings) when confidence is high enough.
-
-        HyDE generates a hypothetical answer first, then embeds THAT for
-        retrieval instead of the raw query. This bridges the lexical gap
-        between short user queries and long KB documents.
-
-        For low-confidence or simple intents, falls back to normal retrieval
-        reusing the intent classifier's query vector (batch embed).
-        """
+    def _retrieve_with_hyde(self, query: str, intent: str, intent_conf: float) -> list:
+        """Retrieve context. Tries normal retrieval first, then HyDE as fallback
+        when the initial retrieval score is low and the query type benefits from it."""
         query_vec = self._intent.last_query_vector
 
-        # Use HyDE for non-trivial queries to improve retrieval.
-        use_hyde = intent_conf >= 0.5 and intent not in ("greeting", "human_agent")
-
-        if use_hyde and self._llm is not None:
-            try:
-                hyde_prompt = (
-                    f"Write a brief hypothetical support article that answers this question:\n"
-                    f"{query}\n\n"
-                    f"Use a helpful, factual tone. Write 2-3 sentences."
-                )
-                hyde_messages = [
-                    {"role": "system", "content": "You are a knowledge base writer."},
-                    {"role": "user", "content": hyde_prompt},
-                ]
-                hyde_answer = self._llm.generate(hyde_messages, temperature=0.3)
-                if hyde_answer and len(hyde_answer) > 20:
-                    logger.debug(
-                        "HyDE generated hypothetical doc (%d chars) for query",
-                        len(hyde_answer),
-                    )
-                    # Embed the hypothetical doc and use that for retrieval.
-                    hyde_vec = self._retriever.embedder.encode([hyde_answer])[0].tolist()
-                    contexts = self._retriever.retrieve(query, self._k, query_vector=hyde_vec)
-                    logger.debug(
-                        "HyDE retrieval returned %d chunks (score=%.3f)",
-                        len(contexts),
-                        Retriever.top_score(contexts),
-                    )
-                    # If HyDE returned good results, use them.
-                    if contexts and Retriever.top_score(contexts) > 0.15:
-                        return contexts
-                    # Otherwise fall through to normal retrieval.
-            except Exception:
-                logger.debug("HyDE generation failed, using direct query", exc_info=True)
-
-        # Normal retrieval (reuse intent embed vector).
+        # Step 1: Always try normal retrieval first (fast).
         contexts = self._retriever.retrieve(query, self._k, query_vector=query_vec)
+        top_score = Retriever.top_score(contexts)
+
+        # Step 2: If retrieval is good enough, return immediately.
+        if top_score >= 0.5:
+            return contexts
+
+        # Step 3: Only use HyDE for specific intents where it helps.
+        hyde_intents = ('how_to', 'technical', 'billing', 'account')
+        use_hyde = (intent_conf >= 0.6 and intent in hyde_intents and self._llm is not None)
+
+        if not use_hyde:
+            return contexts
+
+        try:
+            hyde_prompt = (
+                f"Write a brief hypothetical support article that answers this question:\n"
+                f"{query}\n\n"
+                f"Use a helpful, factual tone. Write 2-3 sentences."
+            )
+            hyde_messages = [
+                {"role": "system", "content": "You are a knowledge base writer."},
+                {"role": "user", "content": hyde_prompt},
+            ]
+            hyde_answer = self._llm.generate(hyde_messages, temperature=0.3)
+            if hyde_answer and len(hyde_answer) > 20:
+                hyde_vec = self._retriever.embedder.encode([hyde_answer])[0].tolist()
+                hyde_contexts = self._retriever.retrieve(query, self._k, query_vector=hyde_vec)
+                # Only use HyDE results if they're better than direct retrieval.
+                if Retriever.top_score(hyde_contexts) > top_score:
+                    logger.debug("HyDE improved retrieval: %.3f -> %.3f", top_score, Retriever.top_score(hyde_contexts))
+                    return hyde_contexts
+        except Exception:
+            logger.debug("HyDE generation failed", exc_info=True)
+
         return contexts
 
     @staticmethod

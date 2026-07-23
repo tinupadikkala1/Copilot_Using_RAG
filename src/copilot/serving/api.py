@@ -60,6 +60,7 @@ _build_lock = threading.Lock()
 
 # Shared build progress — written by the background thread, read by the
 # progress-polling endpoint.
+_build_progress_lock = threading.Lock()
 _build_progress: dict = {
     "status": "idle",        # idle | running | completed | error
     "current": 0,
@@ -257,9 +258,10 @@ def create_app() -> FastAPI:
         global _build_progress
 
         def _progress(current: int, total: int, phase: str) -> None:
-            _build_progress.update(
-                status="running", current=current, total=total, phase=phase
-            )
+            with _build_progress_lock:
+                _build_progress.update(
+                    status="running", current=current, total=total, phase=phase
+                )
             logger.debug("Build progress: %d/%d — %s", current, total, phase)
 
         try:
@@ -280,22 +282,24 @@ def create_app() -> FastAPI:
             )
             docs_count = len(list(KB_RAW.iterdir()))
 
-            _build_progress.update(
-                status="completed",
-                current=_build_progress["total"],
-                result={
-                    "status": "ok",
-                    "documents_loaded": docs_count,
-                    "chunks_indexed": chunks_count,
-                },
-            )
+            with _build_progress_lock:
+                _build_progress.update(
+                    status="completed",
+                    current=_build_progress["total"],
+                    result={
+                        "status": "ok",
+                        "documents_loaded": docs_count,
+                        "chunks_indexed": chunks_count,
+                    },
+                )
         except Exception as exc:
             logger.exception("Background index build failed")
-            _build_progress.update(
-                status="error",
-                error=str(exc),
-                result={"status": "error", "error": str(exc)},
-            )
+            with _build_progress_lock:
+                _build_progress.update(
+                    status="error",
+                    error=str(exc),
+                    result={"status": "error", "error": str(exc)},
+                )
         finally:
             _build_lock.release()
 
@@ -319,8 +323,9 @@ def create_app() -> FastAPI:
             return {"status": "already_running"}
 
         # Reset progress and launch background thread.
-        _build_progress.clear()
-        _build_progress.update(status="starting", current=0, total=0, phase="Initialising…")
+        with _build_progress_lock:
+            _build_progress.clear()
+            _build_progress.update(status="starting", current=0, total=0, phase="Initialising…")
 
         thread = threading.Thread(target=_run_build_in_background, daemon=True)
         thread.start()
@@ -342,7 +347,8 @@ def create_app() -> FastAPI:
         - ``result``: Final build result (only present when status is "completed").
         - ``error``: Error message (only present when status is "error").
         """
-        return dict(_build_progress)
+        with _build_progress_lock:
+            return dict(_build_progress)
 
     return app
 

@@ -141,4 +141,16 @@ def groundedness_score(
     expanded_context = _expand_with_synonyms(context_tokens) if use_synonyms else context_tokens
 
     supported = expanded_answer & expanded_context
-    return min(1.0, len(supported) / len(answer_tokens))  # cap at 1.0
+
+    # Also check bigram overlap for phrase-level grounding.
+    answer_bigrams = set(zip(list(expanded_answer), list(expanded_answer)[1:])) if len(expanded_answer) > 1 else set()
+    context_bigrams: set[tuple[str, str]] = set()
+    for rc in contexts:
+        ctx_tokens_list = list(_tokens(rc.chunk.text))
+        context_bigrams.update(zip(ctx_tokens_list, ctx_tokens_list[1:]))
+
+    bigram_overlap = len(answer_bigrams & context_bigrams) / max(len(answer_bigrams), 1)
+
+    # Combined score: weight unigrams and bigrams.
+    unigram_score = min(1.0, len(supported) / len(answer_tokens))
+    return max(unigram_score, bigram_overlap)  # Take best signal

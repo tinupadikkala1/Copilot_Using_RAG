@@ -34,11 +34,22 @@ class LLMClient:
         self._model = model or settings.llm_model
         self._base_url = (base_url or settings.ollama_base_url).rstrip("/")
         self._timeout = timeout
+        self._client = httpx.Client(timeout=self._timeout)
         logger.info(
             "LLMClient initialised: model=%s url=%s",
             self._model,
             self._base_url,
         )
+
+    def close(self) -> None:
+        """Close the underlying HTTP client."""
+        self._client.close()
+
+    def __del__(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
 
     def generate(
         self,
@@ -65,10 +76,9 @@ class LLMClient:
         }
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
-                resp = client.post(f"{self._base_url}/api/chat", json=payload)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = self._client.post(f"{self._base_url}/api/chat", json=payload)
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.HTTPError as exc:
             logger.exception("Ollama chat API call failed")
             raise RuntimeError(f"LLM generation failed for model {self._model}: {exc}") from exc

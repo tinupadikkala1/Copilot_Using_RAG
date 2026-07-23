@@ -55,7 +55,7 @@ services:
       - "8501:8501"
     restart: unless-stopped
     command: >
-      sh -c "streamlit run src/copilot/serving/ui/chat_app.py --server.port 8501 --server.address 0.0.0.0"
+      sh -c "streamlit run src/copilot/serving/ui/app.py --server.port 8501 --server.address 0.0.0.0"
 
 volumes:
   ollama_data:

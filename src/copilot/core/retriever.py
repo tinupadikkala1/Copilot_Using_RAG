@@ -87,27 +87,40 @@ class Retriever:
 
         # --- Hybrid fusion with BM25 ---
         if self._bm25 is not None and self._bm25_chunk_ids:
-            bm25_results = self._bm25.search(query, k)
+            bm25_results = self._bm25.search(query, k * 2)  # Get more BM25 results for diversity
 
             if bm25_results:
-                # Build a BM25 score map keyed by chunk_id.
                 max_bm25 = max(s for _, s in bm25_results) if bm25_results else 1.0
                 bm25_score_map: dict[str, float] = {}
+                bm25_chunk_map: dict[str, int] = {}  # chunk_id -> bm25 index
                 for idx, score in bm25_results:
                     if idx < len(self._bm25_chunk_ids):
                         cid = self._bm25_chunk_ids[idx]
-                        bm25_score_map[cid] = score / max_bm25
+                        bm25_score_map[cid] = score / max_bm25 if max_bm25 > 0 else 0.0
+                        bm25_chunk_map[cid] = idx
 
-                # Normalise dense scores.
+                # Normalise dense scores and fuse.
                 max_dense = max((rc.score for rc in dense_results), default=1.0)
+                dense_cids: set[str] = set()
                 if max_dense > 0:
                     for rc in dense_results:
+                        dense_cids.add(rc.chunk.chunk_id)
                         norm_dense = rc.score / max_dense
                         bm25_score = bm25_score_map.get(rc.chunk.chunk_id, 0.0)
                         rc.score = self._hybrid_weight * norm_dense + (1 - self._hybrid_weight) * bm25_score
 
-                # Re-sort by combined hybrid score.
+                # Add BM25-only results (not in dense).
+                for cid, norm_score in bm25_score_map.items():
+                    if cid not in dense_cids and self._bm25 is not None:
+                        idx = bm25_chunk_map[cid]
+                        if idx < len(self._bm25._chunks):
+                            chunk = self._bm25._chunks[idx]
+                            bm25_only_score = (1 - self._hybrid_weight) * norm_score
+                            dense_results.append(RetrievedChunk(chunk=chunk, score=bm25_only_score))
+
+                # Re-sort and truncate to k.
                 dense_results.sort(key=lambda x: -x.score)
+                dense_results = dense_results[:k]
 
         logger.debug("Retrieved %d chunks for query (hybrid=%s)", len(dense_results), self._bm25 is not None)
         return dense_results

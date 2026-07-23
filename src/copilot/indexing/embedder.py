@@ -32,7 +32,18 @@ class Embedder:
         self._base_url = (base_url or settings.ollama_base_url).rstrip("/")
         self._model = model or settings.embedding_model
         self._timeout = timeout
+        self._client = httpx.Client(timeout=self._timeout)
         logger.info("Embedder initialised: model=%s url=%s", self._model, self._base_url)
+
+    def close(self) -> None:
+        """Close the underlying HTTP client."""
+        self._client.close()
+
+    def __del__(self) -> None:
+        try:
+            self._client.close()
+        except Exception:
+            pass
 
     def encode(self, texts: list[str]) -> np.ndarray:
         """Return L2-normalized float32 embeddings of shape (n, 768).
@@ -55,10 +66,9 @@ class Embedder:
         }
 
         try:
-            with httpx.Client(timeout=self._timeout) as client:
-                resp = client.post(f"{self._base_url}/api/embed", json=payload)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = self._client.post(f"{self._base_url}/api/embed", json=payload)
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.HTTPError as exc:
             logger.exception("Ollama embed API call failed")
             raise RuntimeError(f"Embedding failed for model {self._model}: {exc}") from exc

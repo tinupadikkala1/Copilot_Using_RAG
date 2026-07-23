@@ -150,6 +150,8 @@ class SupportPipeline:
         intent, intent_conf = self._intent.predict(query, llm_fallback=self._llm)
 
         # --- Smalltalk / greeting shortcut ---
+        # Pre-retrieval routing: only catches greeting and human_agent.
+        # Actual retrieval quality is checked later via should_escalate().
         route_decision = route(intent, intent_conf, 1.0)
         if route_decision == Route.SMALLTALK:
             resp = ChatResponse(

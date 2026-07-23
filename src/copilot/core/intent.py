@@ -8,6 +8,7 @@ router treats as a signal to escalate.
 from __future__ import annotations
 
 import logging
+import threading
 
 import numpy as np
 
@@ -139,7 +140,7 @@ class IntentClassifier:
         self._embedder = embedder
         self._min_confidence = min_confidence
         self._labels: list[str] = list(INTENT_EXAMPLES.keys())
-        self._last_query_vector: list[float] | None = None
+        self._local = threading.local()
 
         # Pre-compute normalised centroid vectors for each intent.
         centroids = []
@@ -159,7 +160,7 @@ class IntentClassifier:
     @property
     def last_query_vector(self) -> list[float] | None:
         """Return the embedding vector from the most recent predict() call."""
-        return self._last_query_vector
+        return getattr(self._local, 'last_query_vector', None)
 
     def predict(self, query: str, *, llm_fallback=None) -> tuple[str, float]:
         """Return ``(intent_label, confidence)`` with confidence in [0, 1].
@@ -178,7 +179,7 @@ class IntentClassifier:
             confidence is below the threshold after both stages.
         """
         vec = self._embedder.encode([query])[0]
-        self._last_query_vector = vec.tolist() if vec is not None else None
+        self._local.last_query_vector = vec.tolist() if vec is not None else None
         sims = self._centroids @ vec  # cosine (both L2-normalised)
         idx = int(np.argmax(sims))
         # Map cosine [-1, 1] -> confidence [0, 1].
@@ -199,7 +200,7 @@ class IntentClassifier:
                             confidence, self._labels[idx] if idx < len(self._labels) else "?",
                             llm_conf, llm_label,
                         )
-                        self._last_query_vector = None  # Invalidate since we used LLM
+                        self._local.last_query_vector = None  # Invalidate since we used LLM
                         return llm_label, llm_conf
             except Exception:
                 logger.exception("LLM intent fallback failed, using centroid result")

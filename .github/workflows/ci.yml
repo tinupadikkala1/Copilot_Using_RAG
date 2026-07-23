@@ -17,22 +17,22 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: "pip"
+
+      - name: Install Poetry
+        run: pip install poetry
 
       - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -e ".[dev]"
+        run: poetry install --no-interaction --no-ansi
 
       - name: Lint with ruff
-        run: ruff check src/ tests/
+        run: poetry run ruff check src/ tests/
 
       - name: Check formatting with black
-        run: black --check src/ tests/
+        run: poetry run black --check src/ tests/
 
       - name: Type check with mypy
-        run: mypy src/copilot/ --ignore-missing-imports
-        continue-on-error: true  # mypy has known issues with numpy stubs
+        run: poetry run mypy src/copilot/ --ignore-missing-imports
+        continue-on-error: true
 
       - name: Run tests (offline-safe)
-        run: PYTHONPATH=src python -m pytest tests/ -v --tb=short -k "not ollama"
+        run: PYTHONPATH=src poetry run python -m pytest tests/ -v --tb=short -k "not ollama"

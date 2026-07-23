@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from collections import defaultdict, deque
 
@@ -19,7 +20,7 @@ def require_api_key(x_api_key: str = Header(default="")) -> None:
     expected = os.environ.get("COPILOT_API_KEY")
     if not expected:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "API key not configured")
-    if x_api_key != expected:
+    if not secrets.compare_digest(x_api_key, expected):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid API key")
 
 

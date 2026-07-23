@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -24,6 +25,19 @@ from copilot.serving.deps import get_pipeline
 from copilot.serving.security import RateLimiter, require_api_key
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a filename to prevent path traversal."""
+    # Take only the basename (strip directories)
+    name = Path(name).name
+    # Remove any remaining path separators and null bytes
+    name = re.sub(r'[/\\\x00]', '', name)
+    # Reject empty or dot-only names
+    if not name or name.startswith('.'):
+        return ''
+    return name
+
 
 _limiter = RateLimiter()
 
@@ -191,6 +205,11 @@ def create_app() -> FastAPI:
                 errors.append({"file": "unknown", "error": "Empty filename"})
                 continue
 
+            safe_name = _sanitize_filename(file.filename)
+            if not safe_name:
+                errors.append({"file": file.filename, "error": "Invalid filename"})
+                continue
+
             if ext not in SUPPORTED_UPLOAD_EXTENSIONS:
                 errors.append(
                     {"file": file.filename, "error": f"Unsupported format '{ext}'"}
@@ -213,13 +232,13 @@ def create_app() -> FastAPI:
                 )
                 continue
 
-            save_path = KB_RAW / file.filename
+            save_path = KB_RAW / safe_name
             with open(save_path, "wb") as f:
                 f.write(content)
 
             saved.append(
                 {
-                    "filename": file.filename,
+                    "filename": safe_name,
                     "size_bytes": len(content),
                     "path": str(save_path),
                 }

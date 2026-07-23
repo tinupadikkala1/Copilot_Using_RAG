@@ -350,6 +350,100 @@ def create_app() -> FastAPI:
         with _build_progress_lock:
             return dict(_build_progress)
 
+    # --- Indexed files & Hard Reset ---
+
+    @app.get(
+        "/indexed-files",
+        dependencies=[Depends(require_api_key)],
+    )
+    def get_indexed_files() -> dict:
+        """Return the list of currently indexed knowledge base files.
+
+        Requires ``X-API-Key`` header. Returns file names, sizes, and formats.
+        """
+        files: list[dict] = []
+        if KB_RAW.exists():
+            for f in sorted(KB_RAW.iterdir()):
+                if f.is_file() and f.suffix.lower() in SUPPORTED_UPLOAD_EXTENSIONS:
+                    files.append({
+                        "filename": f.name,
+                        "size_bytes": f.stat().st_size,
+                        "format": f.suffix.lower().lstrip("."),
+                    })
+        return {
+            "status": "ok",
+            "files": files,
+            "total_files": len(files),
+        }
+
+    @app.delete(
+        "/reset",
+        dependencies=[Depends(require_api_key)],
+    )
+    def hard_reset() -> dict:
+        """Hard reset: clear all uploaded files, vector index, metrics DB, and caches.
+
+        Requires ``X-API-Key`` header. This is irreversible — all data is deleted.
+        Returns a summary of what was cleared.
+        """
+        import shutil
+        from copilot.analytics.db import DB_PATH, init_db
+
+        cleared = []
+
+        # 1. Delete all uploaded files in data/kb_raw/
+        if KB_RAW.exists():
+            file_count = 0
+            for f in KB_RAW.iterdir():
+                if f.is_file():
+                    f.unlink()
+                    file_count += 1
+            cleared.append(f"Deleted {file_count} uploaded file(s)")
+
+        # 2. Delete ChromaDB index
+        chroma_dir = Path("data/chroma")
+        if chroma_dir.exists():
+            shutil.rmtree(chroma_dir)
+            chroma_dir.mkdir(parents=True, exist_ok=True)
+            cleared.append("Cleared ChromaDB vector index")
+
+        # 3. Delete metrics database
+        if DB_PATH.exists():
+            DB_PATH.unlink()
+            cleared.append("Deleted metrics database")
+
+        # 4. Re-initialize the database (creates empty tables)
+        init_db()
+        cleared.append("Re-initialized empty database")
+
+        # 5. Clear the deps singletons so they rebuild with fresh stores
+        from copilot.serving.deps import (
+            get_embedder,
+            get_vector_store,
+            get_retriever,
+            get_intent_classifier,
+            get_llm_client,
+            get_pipeline,
+        )
+        # Clear all lru_cache singletons
+        get_vector_store.cache_clear()
+        get_retriever.cache_clear()
+        get_pipeline.cache_clear()
+        cleared.append("Reset pipeline singletons")
+
+        # 6. Clear response cache
+        from copilot.core.pipeline import _response_cache
+        _response_cache.clear()
+        cleared.append("Cleared response cache")
+
+        logger.info("Hard reset completed: %s", "; ".join(cleared))
+
+        return {
+            "status": "ok",
+            "cleared": cleared,
+            "message": "All data has been reset. Upload new documents to rebuild the index.",
+        }
+
     return app
 
 

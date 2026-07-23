@@ -81,6 +81,35 @@ def _fetch_metrics() -> dict | None:
         return None
 
 
+def _fetch_indexed_files() -> list[dict]:
+    """Fetch the list of currently indexed files from the API."""
+    try:
+        with httpx.Client(timeout=15) as client:
+            resp = client.get(
+                f"{API_URL}/indexed-files",
+                headers={"x-api-key": API_KEY},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("files", [])
+    except httpx.HTTPError:
+        return []
+
+
+def _hard_reset() -> dict | None:
+    """Perform a hard reset via the API — clears all data."""
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.delete(
+                f"{API_URL}/reset",
+                headers={"x-api-key": API_KEY},
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPError:
+        return None
+
+
 
 
 
@@ -118,6 +147,51 @@ st.sidebar.divider()
 st.sidebar.caption("Check the **Dashboard** for resolution metrics.")
 
 # ---------------------------------------------------------------------------
+# Sidebar: Indexed Files Display
+# ---------------------------------------------------------------------------
+
+st.sidebar.divider()
+st.sidebar.subheader("📂 Indexed Files")
+
+_indexed_files = _fetch_indexed_files()
+if _indexed_files:
+    for f in _indexed_files:
+        size_kb = f["size_bytes"] / 1024
+        st.sidebar.markdown(
+            f"📄 `{f['filename']}` ({size_kb:.1f} KB)"
+        )
+    st.sidebar.caption(f"**{len(_indexed_files)} file(s)** in knowledge base")
+else:
+    st.sidebar.caption("No files indexed yet. Upload documents first.")
+
+# ---------------------------------------------------------------------------
+# Sidebar: Hard Reset Button
+# ---------------------------------------------------------------------------
+
+st.sidebar.divider()
+if st.sidebar.button("🗑️ Hard Reset (Clear All)", type="secondary", use_container_width=True):
+    st.session_state.confirm_reset = True
+
+if st.session_state.get("confirm_reset", False):
+    st.sidebar.warning("⚠️ This will delete ALL uploaded files, the vector index, and metrics. This cannot be undone!")
+    col_yes, col_no = st.sidebar.columns(2)
+    if col_yes.button("✅ Yes, Reset", type="primary", use_container_width=True):
+        result = _hard_reset()
+        if result and result.get("status") == "ok":
+            st.session_state.confirm_reset = False
+            st.session_state.messages = []
+            st.session_state.session_id = None
+            st.session_state.upload_status = None
+            st.session_state.index_result = None
+            st.sidebar.success("✅ All data cleared!")
+            st.rerun()
+        else:
+            st.sidebar.error("❌ Reset failed. Is the API running?")
+    if col_no.button("❌ Cancel", use_container_width=True):
+        st.session_state.confirm_reset = False
+        st.rerun()
+
+# ---------------------------------------------------------------------------
 # Session state initialisation
 # ---------------------------------------------------------------------------
 
@@ -146,6 +220,14 @@ def _chat_view() -> None:
         "Ask questions about your uploaded documents — "
         "the copilot answers using the vector index."
     )
+
+    # Show which files the system is using for answers
+    if _indexed_files:
+        with st.expander(f"📂 Answering from {len(_indexed_files)} indexed file(s)", expanded=False):
+            file_names = ", ".join(f"`{f['filename']}`" for f in _indexed_files)
+            st.markdown(f"**Source files:** {file_names}")
+    else:
+        st.info("📭 No documents indexed yet. Go to **Upload KB** to add files and build the index.")
 
     # Show processing indicator while another question is being answered
     if st.session_state.get("chat_processing", False):

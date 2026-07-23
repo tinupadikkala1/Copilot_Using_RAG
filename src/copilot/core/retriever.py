@@ -28,7 +28,7 @@ class Retriever:
         self,
         store: VectorStore,
         embedder: Embedder,
-        hybrid_weight: float = 0.7,
+        hybrid_weight: float = 0.5,
     ) -> None:
         self._store = store
         self._embedder = embedder

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     llm_backend: str = "ollama"
 
     # --- Retrieval ---
-    retrieval_k: int = 8  # retrieve more chunks for better multi-file coverage
+    retrieval_k: int = 10  # retrieve more chunks for better topic coverage
     min_retrieval_score: float = 0.05
 
     # --- Groundedness ---
@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     min_intent_confidence: float = 0.35
 
     # --- Chunking ---
-    chunk_size: int = 800
-    chunk_overlap: int = 150
+    chunk_size: int = 500
+    chunk_overlap: int = 100
 
     # --- Paths ---
     kb_root: str = "data/kb_raw"

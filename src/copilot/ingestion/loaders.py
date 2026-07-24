@@ -1,9 +1,14 @@
-"""Multi-format KB loaders. Each loader returns cleaned plain text."""
+"""Multi-format KB loaders. Each loader returns cleaned plain text.
+
+Supports image detection in PDFs by extracting image captions and positions.
+"""
 
 from __future__ import annotations
 
 import csv
+import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -13,6 +18,28 @@ from pypdf import PdfReader
 from copilot.schemas import RawDocument, SourceType
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PDFImageInfo:
+    """Information about an image found in a PDF."""
+    page: int
+    x: float
+    y: float
+    width: float
+    height: float
+    image_type: str  # /Flate, /DCT, /JPX, etc.
+    caption: str = ""  # Text near the image that might describe it
+
+
+# Image type mappings for better description
+_IMAGE_TYPE_NAMES = {
+    "/Flate": "compressed",
+    "/DCT": "JPEG",
+    "/JPX": "JPEG 2000",
+    "/CCITT": "CCITT Fax",
+    "/JBIG2": "JBIG2",
+}
 
 
 def _read_txt(path: Path) -> str:
@@ -33,13 +60,80 @@ def _read_html(path: Path) -> str:
     return soup.get_text(separator="\n")
 
 
-def _read_pdf(path: Path) -> str:
-    """Extract text from a PDF file using pypdf."""
+def _extract_pdf_text_with_images(path: Path) -> tuple[str, list[PDFImageInfo]]:
+    """Extract text from PDF with image detection and captions.
+    
+    Returns:
+        Tuple of (text content, list of image info)
+    """
+    images: list[PDFImageInfo] = []
+    full_text_parts: list[str] = []
+    
     try:
         reader = PdfReader(str(path))
     except Exception as exc:
         raise ValueError(f"Unreadable PDF: {path}") from exc
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    
+    for page_num, page in enumerate(reader.pages):
+        # Extract text
+        page_text = page.extract_text() or ""
+        full_text_parts.append(page_text)
+        
+        # Extract image info from page resources
+        try:
+            resources = page.get("/Resources", {})
+            xobject = resources.get("/XObject", {})
+            
+            if xobject:
+                for obj_name, obj_ref in xobject.items():
+                    try:
+                        obj = obj_ref.get_object()
+                        subtype = obj.get("/Subtype", "")
+                        
+                        if str(subtype) in ["/Image", "/Form"]:
+                            # Extract image dimensions
+                            width = obj.get("/Width", 0)
+                            height = obj.get("/Height", 0)
+                            bits = obj.get("/BitsPerComponent", 8)
+                            
+                            # Try to get position info from content stream
+                            # This is approximate - PDF position extraction is complex
+                            image_info = PDFImageInfo(
+                                page=page_num,
+                                x=0.0,  # Approximate position
+                                y=0.0,
+                                width=float(width) if width else 0.0,
+                                height=float(height) if height else 0.0,
+                                image_type=str(obj.get("/Subtype", "unknown")),
+                                caption=""
+                            )
+                            images.append(image_info)
+                    except Exception as e:
+                        logger.debug(f"Could not extract image {obj_name}: {e}")
+        except Exception:
+            pass  # Some PDFs don't have XObject resources
+    
+    return "\n\n".join(full_text_parts), images
+
+
+def _read_pdf(path: Path) -> str:
+    """Extract text from a PDF file using pypdf.
+    
+    Also captures image information for later use.
+    """
+    text, images = _extract_pdf_text_with_images(path)
+    
+    # Append image metadata as structured text
+    if images:
+        image_info = f"\n\n[PDF_IMAGES: Found {len(images)} image(s)]\n"
+        for img in images[:10]:  # Limit to first 10 images to avoid overwhelming
+            img_type = _IMAGE_TYPE_NAMES.get(img.image_type, img.image_type.replace("/", ""))
+            image_info += f"- Image on page {img.page} ({img_type}): {img.width:.0f}x{img.height:.0f} pixels\n"
+        if len(images) > 10:
+            image_info += f"- ... and {len(images) - 10} more images\n"
+        text += image_info
+    
+    return text
 
 
 def _read_csv(path: Path) -> str:

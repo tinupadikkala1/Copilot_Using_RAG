@@ -11,71 +11,53 @@ logger = logging.getLogger(__name__)
 
 _PARA_SPLIT = re.compile(r"\n\s*\n")
 
-# Patterns that indicate section headers (Markdown, plain text, PDF-extracted).
+# Patterns that indicate section headings (Markdown, plain text, PDF-extracted).
+# Simplified - matches common heading patterns.
 _HEADING_PATTERNS = [
-    re.compile(r"^#{1,6}\s+.+", re.MULTILINE),           # Markdown: ## Heading
-    re.compile(r"^[A-Z][A-Za-z\s]{2,50}:?\s*$", re.MULTILINE),  # ALL-CAPS or Title Case lines
-    re.compile(r"^\d+\.\s+[A-Z].+", re.MULTILINE),       # Numbered: 1. Section Title
+    re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE),           # Markdown: ## Heading
+    re.compile(r"^(\d+(?:\.\d+)*\.?)\s+([A-Z].+)$", re.MULTILINE),  # 1. Title, 1.1 Title
+    re.compile(r"^([A-Z][A-Za-z\s]{2,50})\n\s*\n", re.MULTILINE),   # Title line followed by blank line
+    re.compile(r"^(.+?)\n-{3,}$", re.MULTILINE),  # Title followed by underline
 ]
-
-
-def _detect_current_section(text: str, position: int) -> str:
-    """Find the nearest section heading before the given position."""
-    lines = text[:position].split("\n")
-    for line in reversed(lines):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        # Check if this looks like a heading
-        if stripped.startswith("#"):
-            return stripped.lstrip("#").strip()
-        # Title-case line that's short (likely a heading)
-        if (len(stripped) < 80 and stripped[0].isupper() and
-            not stripped.endswith(".") and not stripped.endswith(",")):
-            # Check if it looks like a section title
-            words = stripped.split()
-            if len(words) <= 8 and all(w[0].isupper() or w.lower() in ("and", "or", "the", "of", "in", "to", "for", "a", "an", "with") for w in words if w):
-                return stripped
-    return ""
 
 
 def _split_by_sections(text: str) -> list[tuple[str, str]]:
     """Split text into (section_title, section_content) pairs.
-
-    Detects headings and groups content under them. Content before
-    the first heading gets an empty section title.
+    
+    Uses simple, robust pattern matching that works well with PDF-extracted text.
     """
-    # Try to split by markdown headings first
-    heading_re = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
-    matches = list(heading_re.finditer(text))
-
-    if not matches:
-        # Try numbered sections: "1. Title" or "1.1 Title"
-        heading_re = re.compile(r"^(\d+(?:\.\d+)*\.?\s+)([A-Z].{2,60})$", re.MULTILINE)
-        matches = list(heading_re.finditer(text))
-
-    if not matches:
-        # No detectable sections — return entire text as one section
-        return [("", text)]
-
-    sections: list[tuple[str, str]] = []
-
-    # Content before first heading
-    if matches[0].start() > 0:
-        preamble = text[:matches[0].start()].strip()
-        if preamble:
-            sections.append(("", preamble))
-
-    # Each heading starts a section that runs until the next heading
-    for i, match in enumerate(matches):
-        title = match.group(2).strip() if match.lastindex and match.lastindex >= 2 else match.group(0).strip()
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-        content = text[start:end].strip()
-        if content:
-            sections.append((title, content))
-
-    return sections
+    # Try multiple pattern strategies and pick the best split
+    strategies = [
+        (re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE), lambda m: m.group(1)),
+        (re.compile(r"^(\d+(?:\.\d+)*\.?)\s+([A-Z].+)$", re.MULTILINE), lambda m: m.group(2)),
+        (re.compile(r"^([A-Z][A-Za-z\s]{3,40})\n\s*\n", re.MULTILINE), lambda m: m.group(1)),
+    ]
+    
+    for pattern, title_extractor in strategies:
+        matches = list(pattern.finditer(text))
+        if len(matches) >= 2:
+            # Found multiple sections with this pattern
+            sections: list[tuple[str, str]] = []
+            
+            # Content before first section
+            if matches[0].start() > 0:
+                preamble = text[:matches[0].start()].strip()
+                if preamble:
+                    sections.append(("", preamble))
+            
+            # Each section
+            for i, match in enumerate(matches):
+                title = title_extractor(match).strip()
+                start = match.end()
+                end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+                content = text[start:end].strip()
+                if content:
+                    sections.append((title, content))
+            
+            return sections if sections else [("", text)]
+    
+    # No detectable sections — return entire text as one section
+    return [("", text)]
 
 
 def _split_text(text: str, chunk_size: int, overlap: int) -> list[str]:

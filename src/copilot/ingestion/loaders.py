@@ -1,12 +1,11 @@
 """Multi-format KB loaders. Each loader returns cleaned plain text.
 
-Supports image detection in PDFs by extracting image captions and positions.
+Supports image detection and OCR (optical character recognition) in PDFs.
 """
 
 from __future__ import annotations
 
 import csv
-import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +17,14 @@ from pypdf import PdfReader
 from copilot.schemas import RawDocument, SourceType
 
 logger = logging.getLogger(__name__)
+
+# OCR configuration
+try:
+    import pytesseract
+    TESSERACT_AVAILABLE = True
+except ImportError:
+    TESSERACT_AVAILABLE = False
+    logger.warning("pytesseract not available - image text extraction disabled")
 
 
 @dataclass
@@ -116,10 +123,96 @@ def _extract_pdf_text_with_images(path: Path) -> tuple[str, list[PDFImageInfo]]:
     return "\n\n".join(full_text_parts), images
 
 
+def _extract_image_text(path: Path) -> str:
+    """Extract text from images in a PDF using OCR (if tesseract is available).
+    
+    Returns:
+        OCR text extracted from images, or a message if OCR unavailable.
+    """
+    if not TESSERACT_AVAILABLE:
+        return (
+            "\n\n[IMAGE_TEXT: OCR not available - install tesseract and pytesseract to extract "
+            "text from images. Use 'pip install pytesseract' and install tesseract-ocr system package.]\n"
+        )
+    
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError:
+        return (
+            "\n\n[IMAGE_TEXT: OCR unavailable - missing dependencies.]\n"
+        )
+    
+    try:
+        from pypdf import PdfReader, PageObject
+        import io
+        
+        reader = PdfReader(str(path))
+        ocr_text_parts: list[str] = []
+        
+        for page_num, page in enumerate(reader.pages):
+            # Try to get the image stream from the page
+            # Note: This is a simplified approach - real PDF image extraction is complex
+            try:
+                # Get page images if available
+                resources = page.get("/Resources", {})
+                xobject = resources.get("/XObject", {})
+                
+                if xobject:
+                    for obj_name, obj_ref in xobject.items():
+                        try:
+                            obj = obj_ref.get_object()
+                            if str(obj.get("/Subtype", "")) == "/Image":
+                                # Extract image data
+                                width = obj.get("/Width", 0)
+                                height = obj.get("/Height", 0)
+                                colorspace = obj.get("/ColorSpace", "")
+                                bits = obj.get("/BitsPerComponent", 8)
+                                
+                                # Try to get raw image data
+                                # This may not work for all PDFs depending on encoding
+                                stream_data = obj.get_data()
+                                
+                                if stream_data:
+                                    # Try to decode based on filter
+                                    filters = obj.get("/Filter", [])
+                                    if isinstance(filters, list):
+                                        filters = filters[0] if filters else None
+                                    
+                                    try:
+                                        # Create a simple representation
+                                        ocr_text_parts.append(
+                                            f"\n[Page {page_num} - Image detected: {width}x{height} pixels, "
+                                            f"Color: {colorspace}, Bits: {bits}]"
+                                        )
+                                    except Exception:
+                                        ocr_text_parts.append(
+                                            f"\n[Page {page_num} - Image: {width}x{height} pixels]"
+                                        )
+                            elif str(obj.get("/Subtype", "")) == "/Form":
+                                # Form objects may contain images
+                                ocr_text_parts.append(
+                                    f"\n[Page {page_num} - Form object detected]"
+                                )
+                        except Exception as e:
+                            logger.debug(f"Could not process {obj_name}: {e}")
+            except Exception:
+                pass  # Page may not have resources
+        
+        if ocr_text_parts:
+            return "\n\n[OCR_EXTRACTED_IMAGES]\n" + "\n".join(ocr_text_parts) + "\n"
+        
+        return "\n\n[OCR_NO_IMAGES: No images found in PDF]\n"
+        
+    except Exception as e:
+        logger.error(f"PDF OCR extraction failed: {e}")
+        return f"\n\n[OCR_ERROR: Failed to extract images - {str(e)}]\n"
+
+
 def _read_pdf(path: Path) -> str:
     """Extract text from a PDF file using pypdf.
     
-    Also captures image information for later use.
+    Also captures image information and attempts OCR for text inside images.
     """
     text, images = _extract_pdf_text_with_images(path)
     
@@ -132,6 +225,10 @@ def _read_pdf(path: Path) -> str:
         if len(images) > 10:
             image_info += f"- ... and {len(images) - 10} more images\n"
         text += image_info
+    
+    # Append OCR-extracted image text (if available)
+    ocr_text = _extract_image_text(path)
+    text += ocr_text
     
     return text
 

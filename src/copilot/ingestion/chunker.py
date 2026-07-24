@@ -11,15 +11,6 @@ logger = logging.getLogger(__name__)
 
 _PARA_SPLIT = re.compile(r"\n\s*\n")
 
-# Patterns that indicate section headings (Markdown, plain text, PDF-extracted).
-# Simplified - matches common heading patterns.
-_HEADING_PATTERNS = [
-    re.compile(r"^#{1,6}\s+(.+)$", re.MULTILINE),           # Markdown: ## Heading
-    re.compile(r"^(\d+(?:\.\d+)*\.?)\s+([A-Z].+)$", re.MULTILINE),  # 1. Title, 1.1 Title
-    re.compile(r"^([A-Z][A-Za-z\s]{2,50})\n\s*\n", re.MULTILINE),   # Title line followed by blank line
-    re.compile(r"^(.+?)\n-{3,}$", re.MULTILINE),  # Title followed by underline
-]
-
 
 def _split_by_sections(text: str) -> list[tuple[str, str]]:
     """Split text into (section_title, section_content) pairs.

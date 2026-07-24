@@ -28,23 +28,6 @@ GREETING_REPLY = "Hi! I'm your support assistant. What can I help you with today
 # Set very low so the LLM always gets a chance to answer.
 _MIN_RETRIEVAL_FOR_LLM = 0.01
 
-# Fallback answer when retrieval is too weak — still tries LLM but
-# acknowledges uncertainty. No ticket is created since there's no
-# human queue to handle it.
-_LOW_CONFIDENCE_ANSWER = (
-    "I don't have enough information in my knowledge base to give you a "
-    "confident answer to that. Here's what I can tell you based on "
-    "what I found:\n\n"
-)
-
-# Regex to strip sentences that redirect users to customer support.
-_CONTACT_SUPPORT_RE = re.compile(
-    r'[^.!?]*(?:contact|reach out to|get in touch with)'
-    r'\s+(?:our|the|a)?\s*(?:customer|support|service|help|care|team|agent|representative)'
-    r'[^.!?]*[.!?]?\s*',
-    re.IGNORECASE,
-)
-
 # Response cache for identical queries.
 _response_cache = ResponseCache(maxsize=128, ttl_s=300.0)
 
